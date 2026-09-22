@@ -65,12 +65,16 @@ def select_feeders(bcc_target_mw, feeder_list, cooldown_hours=4, current_time=No
 
     Rules applied, in order:
     1. Exclude every feeder with priority_level = 0
-    2. Prefer higher priority_level first
-    3. Among equal priority, prefer the OLDEST last_cut_at (fair rotation)
-    4. Skip any feeder still inside its cooldown window
-    5. Stop adding feeders once combined avg_load_mw meets/exceeds bcc_target_mw
-    6. Attach a 45-minute max duration note to every selected feeder
-    7. Attach a human-readable reason string to every selected feeder
+    2. Skip any feeder still inside its cooldown window
+    3. Score each remaining feeder using a weighted fairness formula:
+         Score = 0.45*(priority/5) + 0.25*min(days_since_cut/30, 1)
+                 + 0.20*max(0, 1 - cuts_this_month/5) - 0.10*(load/max_load)
+       -> priority dominates (45%), but rotation (25%) and anti-repetition (20%)
+          guarantee no feeder is neglected or overused forever; load protection (10%)
+          discourages always hitting the single biggest feeder.
+    4. Stop adding feeders once combined avg_load_mw meets/exceeds bcc_target_mw
+    5. Attach a 45-minute max duration note to every selected feeder
+    6. Attach a human-readable reason string to every selected feeder
     """
     if current_time is None:
         current_time = datetime.now()
@@ -78,7 +82,7 @@ def select_feeders(bcc_target_mw, feeder_list, cooldown_hours=4, current_time=No
     # Rule 1: exclude priority_level = 0 (critical, never-cut feeders)
     eligible = [f for f in feeder_list if f["priority_level"] != 0]
 
-    # Rule 4: skip feeders still inside their cooldown window
+    # Rule 2: skip feeders still inside their cooldown window
     def is_in_cooldown(f):
         if f["last_cut_at"] is None:
             return False
@@ -87,15 +91,33 @@ def select_feeders(bcc_target_mw, feeder_list, cooldown_hours=4, current_time=No
 
     eligible = [f for f in eligible if not is_in_cooldown(f)]
 
-    # Rule 2 + 3: sort by priority DESC, then oldest last_cut_at first
-    def sort_key(f):
+    if len(eligible) == 0:
+        return []
+
+    # Rule 3: weighted fairness score
+    max_load = max(f["avg_load_mw"] for f in eligible)
+
+    def fairness_score(f):
         priority = f["priority_level"]
-        last_cut = f["last_cut_at"] if f["last_cut_at"] is not None else datetime.min
-        return (-priority, last_cut)
 
-    eligible.sort(key=sort_key)
+        if f["last_cut_at"] is None:
+            days_since_cut = 30  # never cut = treat as fully "overdue" (caps at the formula's own max)
+        else:
+            days_since_cut = (current_time - f["last_cut_at"]).days
 
-    # Rule 5 + 6 + 7: keep adding feeders until target MW is met,
+        cuts_this_month = f.get("total_cuts_month", 0)
+        load = f["avg_load_mw"]
+
+        priority_term = 0.45 * (priority / 5)
+        rotation_term = 0.25 * min(days_since_cut / 30, 1)
+        anti_repetition_term = 0.20 * max(0, 1 - (cuts_this_month / 5))
+        load_term = 0.10 * (load / max_load) if max_load > 0 else 0
+
+        return priority_term + rotation_term + anti_repetition_term - load_term
+
+    eligible.sort(key=fairness_score, reverse=True)  # highest score first
+
+    # Rule 4 + 5 + 6: keep adding feeders until target MW is met,
     # tag each with max duration AND a reason string
     proposed_feeders = []
     total_mw = 0
@@ -152,6 +174,8 @@ def build_j1_program(deficit_per_slot, date):
     }
 
     return provisional_schedule
+
+
 def _compute_ens_and_equity(execution_records):
     """
     Pure calculation — no database calls, so it's easy to test with fake data.
@@ -228,17 +252,21 @@ def compute_kpi(region, period_start, period_end):
         })
 
     return _compute_ens_and_equity(enriched_records)
+
+
 def explain_selection(feeder_id, current_time=None):
     """
     A queryable (structured) version of the reason string from select_feeders().
     Instead of a sentence, returns separate fields the chatbot/UI can use directly.
+    Includes cuts_this_month, so it fully matches the real fairness formula
+    used by select_feeders() (priority + rotation + anti-repetition + load).
     """
     if current_time is None:
         current_time = datetime.now()
 
     # Fetch the feeder itself
     feeder_response = supabase.table("feeders").select(
-        "id, priority_level, avg_load_mw, last_cut_at, bcc_id"
+        "id, priority_level, avg_load_mw, last_cut_at, bcc_id, total_cuts_month"
     ).eq("id", feeder_id).execute()
 
     if len(feeder_response.data) == 0:
@@ -261,8 +289,10 @@ def explain_selection(feeder_id, current_time=None):
     return {
         "priority_level": feeder["priority_level"],
         "days_since_last_cut": days_since_last_cut,
-        "load_weight": load_weight
+        "load_weight": load_weight,
+        "cuts_this_month": feeder.get("total_cuts_month", 0)
     }
+
 
 # ============================================================
 # TEST SCENARIOS — run this file directly to execute all tests
@@ -303,10 +333,10 @@ if __name__ == "__main__":
     now = datetime.now()
 
     fake_feeders_a = [
-        {"name": "F1", "priority_level": 5, "avg_load_mw": 5, "last_cut_at": now - timedelta(hours=1)},   # in cooldown
-        {"name": "F2", "priority_level": 5, "avg_load_mw": 4, "last_cut_at": None},                        # eligible
-        {"name": "F3", "priority_level": 4, "avg_load_mw": 6, "last_cut_at": now - timedelta(hours=10)},  # eligible
-        {"name": "F4", "priority_level": 0, "avg_load_mw": 10, "last_cut_at": None},                       # excluded
+        {"name": "F1", "priority_level": 5, "avg_load_mw": 5, "last_cut_at": now - timedelta(hours=1), "total_cuts_month": 2},   # in cooldown
+        {"name": "F2", "priority_level": 5, "avg_load_mw": 4, "last_cut_at": None, "total_cuts_month": 0},                        # eligible
+        {"name": "F3", "priority_level": 4, "avg_load_mw": 6, "last_cut_at": now - timedelta(hours=10), "total_cuts_month": 1},  # eligible
+        {"name": "F4", "priority_level": 0, "avg_load_mw": 10, "last_cut_at": None, "total_cuts_month": 0},                       # excluded
     ]
     result_a = select_feeders(8, fake_feeders_a, cooldown_hours=4, current_time=now)
     print("Scenario 1 (cooldown + priority-0 mix):")
@@ -314,22 +344,32 @@ if __name__ == "__main__":
         print(" ", f["name"], "| reason:", f["reason"])
 
     fake_feeders_b = [
-        {"name": "G1", "priority_level": 3, "avg_load_mw": 5, "last_cut_at": now - timedelta(minutes=30)},
-        {"name": "G2", "priority_level": 4, "avg_load_mw": 5, "last_cut_at": now - timedelta(hours=2)},
+        {"name": "G1", "priority_level": 3, "avg_load_mw": 5, "last_cut_at": now - timedelta(minutes=30), "total_cuts_month": 3},
+        {"name": "G2", "priority_level": 4, "avg_load_mw": 5, "last_cut_at": now - timedelta(hours=2), "total_cuts_month": 2},
     ]
     result_b = select_feeders(10, fake_feeders_b, cooldown_hours=4, current_time=now)
     print("Scenario 2 (all in cooldown, expect empty list):", result_b)
 
-    real_feeders = supabase.table("feeders").select("name, priority_level, avg_load_mw, last_cut_at").limit(10).execute()
+    real_feeders = supabase.table("feeders").select("name, priority_level, avg_load_mw, last_cut_at, total_cuts_month").limit(10).execute()
     result_c = select_feeders(15, real_feeders.data, cooldown_hours=4, current_time=now)
     print("Scenario 3 (real database feeders):")
     for f in result_c:
         print(" ", f["name"], "| priority:", f["priority_level"], "| load:", f["avg_load_mw"], "| reason:", f["reason"])
 
+    # ---------- select_feeders() fairness formula proof ----------
+    print("\n=== select_feeders() fairness formula proof ===")
+    fairness_test_feeders = [
+        {"name": "HighPrio_RecentlyCut", "priority_level": 5, "avg_load_mw": 5, "last_cut_at": now - timedelta(days=2), "total_cuts_month": 8},
+        {"name": "LowPrio_NeverCut", "priority_level": 2, "avg_load_mw": 5, "last_cut_at": None, "total_cuts_month": 0},
+    ]
+    result_fairness = select_feeders(5, fairness_test_feeders, cooldown_hours=4, current_time=now)
+    print("Winner (should be LowPrio_NeverCut, despite lower priority):")
+    for f in result_fairness:
+        print(" ", f["name"], "| reason:", f["reason"])
+
     # ---------- estimate_national_deficit() + build_j1_program() tests ----------
     print("\n=== estimate_national_deficit() + build_j1_program() ===")
 
-    # Scenario 1: a simple day with 6 slots, some deficit, some surplus
     load_forecast_1 = [3000, 3200, 4500, 4800, 4000, 3100]
     available_1     = [3000, 3000, 4000, 4200, 4000, 3500]
     deficits_1 = estimate_national_deficit(load_forecast_1, available_1, time_step_minutes=240)
@@ -338,14 +378,12 @@ if __name__ == "__main__":
     program_1 = build_j1_program(deficits_1, date="2026-09-21")
     print("Scenario 1 program:", program_1)
 
-    # Scenario 2: edge case — perfectly balanced day, no deficit anywhere
     load_forecast_2 = [3000, 3000, 3000]
     available_2     = [3000, 3000, 3000]
     deficits_2 = estimate_national_deficit(load_forecast_2, available_2)
     program_2 = build_j1_program(deficits_2, date="2026-09-22")
     print("Scenario 2 (no deficit anywhere):", program_2)
 
-    # Scenario 3: mismatched list lengths — should raise an error
     try:
         estimate_national_deficit([100, 200], [100])
     except ValueError as e:
@@ -354,13 +392,11 @@ if __name__ == "__main__":
     # ---------- FULL CHAIN END-TO-END TEST ----------
     print("\n=== FULL CHAIN: national target -> regions -> BCCs -> feeders ===")
 
-    national_target = 500  # MW the DN operator says needs to be cut today
+    national_target = 500
 
-    # Step 1: split national target into regions
     regional_split = split_regional_target(national_target)
     print("Step 1 - Regional split:", regional_split)
 
-    # Step 2: for each region, split its target across its BCCs
     for region in ["nord", "sud"]:
         region_target = regional_split[f"{region}_mw"]
         region_bccs = supabase.table("bcc").select("id, name, avg_load_mw").eq("crc", region).execute()
@@ -370,10 +406,9 @@ if __name__ == "__main__":
         for alloc in bcc_allocations:
             print(" ", alloc)
 
-        # Step 3: for each BCC, select which feeders to cut
         for bcc, alloc in zip(region_bccs.data, bcc_allocations):
             bcc_feeders = supabase.table("feeders").select(
-                "name, priority_level, avg_load_mw, last_cut_at"
+                "name, priority_level, avg_load_mw, last_cut_at, total_cuts_month"
             ).eq("bcc_id", bcc["id"]).execute()
 
             selected = select_feeders(alloc["allocated_mw"], bcc_feeders.data)
@@ -387,11 +422,9 @@ if __name__ == "__main__":
     # ---------- compute_kpi() tests ----------
     print("\n=== compute_kpi() ===")
 
-    # Scenario 1: real database call — expect zeros since execution_log is empty
     kpi_real = compute_kpi("nord", datetime(2026, 1, 1), datetime(2026, 12, 31))
     print("Scenario 1 (real DB, no execution data yet):", kpi_real)
 
-    # Scenario 2: pure math test with fake, unfair distribution
     fake_records_unfair = [
         {"zone_id": "zoneA", "actual_mw_shed": 5, "actual_start": now, "actual_end": now + timedelta(minutes=45)},
         {"zone_id": "zoneA", "actual_mw_shed": 4, "actual_start": now, "actual_end": now + timedelta(minutes=30)},
@@ -401,7 +434,6 @@ if __name__ == "__main__":
     kpi_unfair = _compute_ens_and_equity(fake_records_unfair)
     print("Scenario 2 (unfair: zoneA cut 3x, zoneB cut 1x):", kpi_unfair)
 
-    # Scenario 3: pure math test with fake, perfectly fair distribution
     fake_records_fair = [
         {"zone_id": "zoneA", "actual_mw_shed": 5, "actual_start": now, "actual_end": now + timedelta(minutes=45)},
         {"zone_id": "zoneB", "actual_mw_shed": 5, "actual_start": now, "actual_end": now + timedelta(minutes=45)},
@@ -409,20 +441,18 @@ if __name__ == "__main__":
     ]
     kpi_fair = _compute_ens_and_equity(fake_records_fair)
     print("Scenario 3 (perfectly fair: each zone cut exactly once):", kpi_fair)
+
     # ---------- explain_selection() tests ----------
     print("\n=== explain_selection() ===")
 
-    # Scenario 1: a real feeder from the database
     one_feeder = supabase.table("feeders").select("id, name").limit(1).execute().data[0]
     explanation_1 = explain_selection(one_feeder["id"])
     print(f"Scenario 1 ({one_feeder['name']}):", explanation_1)
 
-    # Scenario 2: a different real feeder, to compare
     another_feeder = supabase.table("feeders").select("id, name").limit(1).offset(5).execute().data[0]
     explanation_2 = explain_selection(another_feeder["id"])
     print(f"Scenario 2 ({another_feeder['name']}):", explanation_2)
 
-    # Scenario 3: invalid feeder id — should raise a clear error
     try:
         explain_selection("00000000-0000-0000-0000-000000000000")
     except ValueError as e:
