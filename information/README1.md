@@ -2,13 +2,22 @@
 
 This is the core decision engine for the PESTGM 7.0 Load Shedding Management Platform (Track 2). It owns the database schema and all the logic that decides **which feeders get cut, in what order, and why**.
 
-## What's in this folder
+## Where things are
+
+**Code (repo root):**
 
 | File | Purpose |
 |---|---|
 | `create_tables.sql` | Creates the 7 core tables in Supabase (run once, in Supabase Studio's SQL Editor) |
 | `generate_data.py` | Generates and inserts synthetic test data: 7 BCC, 18 zones, 45 feeders |
 | `functions.py` | All 7 decision-logic functions, fully tested with 3+ scenarios each |
+
+**Documentation (`information/` folder):**
+
+| File | Purpose |
+|---|---|
+| `information/task1_summary1.md` | Short summary of what was built, for teammates |
+| `information/report_task1.md` | Detailed report section (data model + selection rules) for the team's official technical report |
 
 ## Setup (local, no cloud account needed)
 
