@@ -199,9 +199,9 @@ def _compute_ens_and_equity(execution_records):
         counts = list(cuts_per_zone.values())
         mean_count = sum(counts) / len(counts)
         variance = sum((c - mean_count) ** 2 for c in counts) / len(counts)
-        equity_index = round(variance ** 0.5, 2)  # standard deviation; 0 = perfectly fair
+        inequality_index = round(variance ** 0.5, 2)  # standard deviation; 0 = perfectly fair
 
-    return {"ens_mwh": total_ens_mwh, "equity_index": equity_index}
+    return {"ens_mwh": total_ens_mwh, "inequality_index": inequality_index}
 
 
 def compute_kpi(region, period_start, period_end):
@@ -215,21 +215,21 @@ def compute_kpi(region, period_start, period_end):
     bccs = supabase.table("bcc").select("id").eq("crc", region).execute()
     bcc_ids = [b["id"] for b in bccs.data]
     if not bcc_ids:
-        return {"ens_mwh": 0, "equity_index": 0}
+        return {"ens_mwh": 0, "inequality_index": 0}
 
     # Step 2: find feeders belonging to those BCCs, with their zone
     feeders = supabase.table("feeders").select("id, zone_id").in_("bcc_id", bcc_ids).execute()
     feeder_zone_map = {f["id"]: f["zone_id"] for f in feeders.data}
     feeder_ids = list(feeder_zone_map.keys())
     if not feeder_ids:
-        return {"ens_mwh": 0, "equity_index": 0}
+        return {"ens_mwh": 0, "inequality_index": 0}
 
     # Step 3: find scheduled entries linked to those feeders
     schedules = supabase.table("program_schedule").select("id, feeder_id").in_("feeder_id", feeder_ids).execute()
     schedule_feeder_map = {s["id"]: s["feeder_id"] for s in schedules.data}
     schedule_ids = list(schedule_feeder_map.keys())
     if not schedule_ids:
-        return {"ens_mwh": 0, "equity_index": 0}
+        return {"ens_mwh": 0, "inequality_index": 0}
 
     # Step 4: find real execution logs for those schedules, within the period
     logs = supabase.table("execution_log").select(
