@@ -1,1 +1,0 @@
-truncate table feeders, zones, bcc restart identity cascade;

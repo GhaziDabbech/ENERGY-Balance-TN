@@ -1,1 +1,6 @@
-supabase/.temp/ 
+supabase/.temp/
+supabase/.branches/
+supabase/snippets/
+__pycache__/
+*.pyc
+.env

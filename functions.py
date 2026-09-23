@@ -1,9 +1,24 @@
 from supabase import create_client
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 url = "http://127.0.0.1:54321"
 key = "sb_publishable_ACJWlzQHlZjBrEguHvfOxg_3BJgxAaH"
 supabase = create_client(url, key)
+
+
+def _now():
+    """Current time in UTC without timezone info.
+    Team convention: the database stores timestamps in UTC (without timezone)."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def _to_dt(value):
+    """Database rows give timestamps as strings; tests give datetime objects.
+    Accept both, and always return a UTC datetime without timezone (or None)."""
+    if value is None or isinstance(value, datetime):
+        return value
+    dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    return dt.astimezone(timezone.utc).replace(tzinfo=None) if dt.tzinfo else dt
 
 
 def split_regional_target(national_target_mw, ratio=0.66):
@@ -42,14 +57,14 @@ def build_reason_string(feeder, current_time=None):
       "Priority 4, last cut 10 hours ago"
     """
     if current_time is None:
-        current_time = datetime.now()
+        current_time = _now()
 
     priority = feeder["priority_level"]
 
     if feeder["last_cut_at"] is None:
         return f"Priority {priority}, never cut before"
 
-    time_since_cut = current_time - feeder["last_cut_at"]
+    time_since_cut = current_time - _to_dt(feeder["last_cut_at"])
     days_since_cut = time_since_cut.days
 
     if days_since_cut >= 1:
@@ -77,7 +92,7 @@ def select_feeders(bcc_target_mw, feeder_list, cooldown_hours=4, current_time=No
     6. Attach a human-readable reason string to every selected feeder
     """
     if current_time is None:
-        current_time = datetime.now()
+        current_time = _now()
 
     # Rule 1: exclude priority_level = 0 (critical, never-cut feeders)
     eligible = [f for f in feeder_list if f["priority_level"] != 0]
@@ -86,7 +101,7 @@ def select_feeders(bcc_target_mw, feeder_list, cooldown_hours=4, current_time=No
     def is_in_cooldown(f):
         if f["last_cut_at"] is None:
             return False
-        time_since_cut = current_time - f["last_cut_at"]
+        time_since_cut = current_time - _to_dt(f["last_cut_at"])
         return time_since_cut < timedelta(hours=cooldown_hours)
 
     eligible = [f for f in eligible if not is_in_cooldown(f)]
@@ -103,7 +118,7 @@ def select_feeders(bcc_target_mw, feeder_list, cooldown_hours=4, current_time=No
         if f["last_cut_at"] is None:
             days_since_cut = 30  # never cut = treat as fully "overdue" (caps at the formula's own max)
         else:
-            days_since_cut = (current_time - f["last_cut_at"]).days
+            days_since_cut = (current_time - _to_dt(f["last_cut_at"])).days
 
         cuts_this_month = f.get("total_cuts_month", 0)
         load = f["avg_load_mw"]
@@ -247,8 +262,8 @@ def compute_kpi(region, period_start, period_end):
         enriched_records.append({
             "zone_id": zone_id,
             "actual_mw_shed": log["actual_mw_shed"],
-            "actual_start": datetime.fromisoformat(log["actual_start"]),
-            "actual_end": datetime.fromisoformat(log["actual_end"]),
+            "actual_start": _to_dt(log["actual_start"]),
+            "actual_end": _to_dt(log["actual_end"]),
         })
 
     return _compute_ens_and_equity(enriched_records)
@@ -262,7 +277,7 @@ def explain_selection(feeder_id, current_time=None):
     used by select_feeders() (priority + rotation + anti-repetition + load).
     """
     if current_time is None:
-        current_time = datetime.now()
+        current_time = _now()
 
     # Fetch the feeder itself
     feeder_response = supabase.table("feeders").select(
@@ -278,7 +293,7 @@ def explain_selection(feeder_id, current_time=None):
     if feeder["last_cut_at"] is None:
         days_since_last_cut = None  # "never cut" — no number makes sense here
     else:
-        last_cut = datetime.fromisoformat(feeder["last_cut_at"])
+        last_cut = _to_dt(feeder["last_cut_at"])
         days_since_last_cut = (current_time - last_cut).days
 
     # load_weight: this feeder's share of its BCC's total feeder load
@@ -330,7 +345,7 @@ if __name__ == "__main__":
 
     # ---------- select_feeders() tests ----------
     print("\n=== select_feeders() ===")
-    now = datetime.now()
+    now = _now()
 
     fake_feeders_a = [
         {"name": "F1", "priority_level": 5, "avg_load_mw": 5, "last_cut_at": now - timedelta(hours=1), "total_cuts_month": 2},   # in cooldown
