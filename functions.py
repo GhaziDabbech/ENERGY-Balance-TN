@@ -194,7 +194,7 @@ def _compute_ens_and_equity(execution_records):
     total_ens_mwh = round(total_ens_mwh, 2)
 
     if len(cuts_per_zone) == 0:
-        equity_index = 0
+    	inequality_index = 0
     else:
         counts = list(cuts_per_zone.values())
         mean_count = sum(counts) / len(counts)
