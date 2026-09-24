@@ -9,6 +9,7 @@ the two regional centres (CRC Nord / CRC Sud) and the 7 local bureaus (BCC). ENE
 digitizes that chain, keeps the rotation fair, keeps a human in control of every cut, and tells each
 citizen clearly what is happening in *their* zone.
 
+**Submission documents:** [Technical report (PDF)](docs/Technical_Report.pdf) ·
 ## What the platform does
 
 ```
@@ -24,7 +25,9 @@ DN  ── national deficit per time slot (J-1 program)
 - **Fairness engine**: each feeder gets a score = 45% priority + 25% time since last cut
   + 20% fewer cuts in the last 30 days − 10% load. Hard rules: priority-0 feeders (hospitals, water
   pumping) are never cut, maximum 45 minutes per cut, 4-hour anti-repetition cooldown.
-- **Human in the loop**: the engine only *proposes* (`planned`). A BCC operator approves each cut
+- **Human in the loop**: the engine (or the staff AI assistant) only *proposes* cuts (`planned`). A BCC operator
+  approves or rejects each one before it exists for citizens, can cancel an approved cut by typing `I CONFIRM`,
+  and logs the execution once the cut has started. Executions update the feeder history, so the rotation really rotates.
   before it exists for citizens. Executions update the feeder history, so the rotation really rotates.
 - **Privacy by design**: a citizen logs in and only ever sees their own zone (dashboard, map, chatbot).
   Showing every zone side by side could make fair rotation look unfair, so it is not exposed.
@@ -133,10 +136,4 @@ docker exec energy-db psql -U postgres -d energy_balance_tn -f /schema.sql -f /s
 The seed history uses dates relative to the day it is loaded, so it always looks recent.
 To change the demo network, edit `backend/scripts/generate_seed.py` and run it again.
 
-## Team
 
-| Area | Member |
-|---|---|
-| Data model & fairness engine | Teammate 1 |
-| Backend API & citizen dashboard | Mohamed Ghazi Dabbech |
-| AI chatbots, integration, security | Idriss |
