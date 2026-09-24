@@ -2,19 +2,20 @@
 Security by design:
 - Citizen facts are fetched by code from the login token's zone; the model only phrases them,
   and every time it writes is checked against the database before the answer is sent.
-- If a citizen names another zone, the model receives NO schedule data at all (guard in code).
+- Questions about another zone or other places get a fixed refusal: the model is never called.
 - Language is detected in code; runaway/echo answers are replaced by a clean fallback.
 """
 import json
 import os
 import re
-from datetime import date
+from datetime import date, timedelta
 
 import ollama
 from sqlalchemy.orm import Session
 
 from chatbot.tools import (compare_regions, get_kpi, get_selection_reason, get_zone_schedule,
                            list_active_cuts, list_stale_feeders)
+from logic import tunis_now
 from models import Zone
 
 MODEL = os.getenv("OLLAMA_MODEL", "qwen3:8b")
@@ -113,6 +114,12 @@ TEMPLATES = {
                "none": "لا يوجد أي قطع مبرمج أو جارٍ للكهرباء في {zone} حاليًا."},
 }
 
+REFUSAL = {
+    "English": "I can only give information about your own zone, {zone}. You can ask me when the electricity will be cut or come back there.",
+    "French": "Je ne peux donner des informations que sur votre propre zone, {zone}. Vous pouvez me demander quand le courant y sera coupé ou rétabli.",
+    "Arabic": "لا يمكنني تقديم معلومات إلا عن منطقتك، {zone}. يمكنك أن تسألني متى ستنقطع الكهرباء أو تعود فيها.",
+}
+
 UNVERIFIED = {
     "English": "I could not verify that answer against the platform data. Please rephrase your question.",
     "French": "Je n'ai pas pu vérifier cette réponse avec les données de la plateforme. Pouvez-vous reformuler ?",
@@ -153,15 +160,32 @@ def _citizen_template(facts, lang):
                                           end=facts["estimated_restoration_local_time"])
 
 
+def _now_times():
+    now = tunis_now()
+    return {(now + timedelta(minutes=d)).strftime("%H:%M") for d in (-1, 0, 1)}
+
+
 def _allowed_times(facts):
-    allowed = set()
+    allowed = _now_times()
     for cut in facts.get("all_cuts", []):
         allowed |= {cut["start"], cut["end"]}
     return allowed
 
 
+OTHER_PLACES = ("other place", "other zone", "other area", "other region", "other neighbo", "elsewhere",
+                "all zones", "all places", "all areas", "every zone", "everywhere", "whole country",
+                "ailleurs", "autre zone", "autres zones", "autre endroit", "autres endroits", "autres régions",
+                "autres regions", "toutes les zones", "tous les endroits", "partout",
+                "blayes lo5rin", "blays lo5rin", "blayes o5rin", "blasa o5ra", "blasa okhra", "zones lo5rin",
+                "zones lkol", "lkol zones", "kol zone", "lblayes lkol", "win ma9sous",
+                "مناطق أخرى", "أماكن أخرى", "مناطق اخرى", "اماكن اخرى", "كل المناطق", "البلايص لخرين", "بلايص أخرى")
+
+
 def _other_zone_mentioned(db: Session, message: str, own_zone_id: int):
-    """Deterministic guard: name of ANOTHER zone if the citizen's message names one."""
+    """Deterministic guard: name of ANOTHER zone, or a question about other places in general."""
+    low = (message or "").lower()
+    if any(p in low for p in OTHER_PLACES):
+        return "other zones"
     msg = _norm(message)
     for z in db.query(Zone).all():
         if z.id != own_zone_id and _norm(z.name) and _norm(z.name) in msg:
@@ -224,11 +248,11 @@ def _lang_rule(reply_lang):
 # ================= system prompts =================
 
 def _admin_prompt(reply_lang):
-    today = date.today()
+    today = tunis_now().date()
     month_start = today.replace(day=1)
     return f"""{_lang_rule(reply_lang)}
 
-You are the STEG load-shedding assistant for internal staff (DN, CRC, BCC). Today is {today.isoformat()}.
+You are the STEG load-shedding assistant for internal staff (DN, CRC, BCC). Today is {today.isoformat()}, current time {tunis_now():%H:%M} (Tunisia).
 Rules:
 - Use the tools to answer. Quote exact numbers from tool results. Never invent numbers, feeders, zones or reasons.
 - Priority levels go from 0 to 5: 0 is never cut, 1 is the lowest cut priority, 5 is the highest (cut first).
@@ -249,7 +273,9 @@ Rules:
 def _citizen_prompt(zone_name, reply_lang, facts, verified_answer):
     return f"""{_lang_rule(reply_lang)}
 
-You are the STEG power-cut assistant for citizens. Today is {date.today().isoformat()}. All times are Tunisia local time.
+You are the STEG power-cut assistant for citizens. Today is {tunis_now().date().isoformat()}.
+The current time is {facts.get("current_local_time")} (Tunisia local time). Use it ONLY if the user asks what time it is.
+The start and end of a cut are NOT the current time.
 The user lives in the zone "{zone_name}". You only have information about "{zone_name}".
 
 VERIFIED DATA for {zone_name} (from the STEG database, the only source you may use):
@@ -271,16 +297,6 @@ Rules:
 - {DERJA_GLOSSARY}
 - Keep it short and friendly. {_lang_rule(reply_lang)}"""
 
-
-def _refusal_prompt(own_zone, other_zone, reply_lang):
-    return f"""{_lang_rule(reply_lang)}
-
-You are the STEG power-cut assistant for citizens. The user lives in "{own_zone}" but asked about "{other_zone}".
-You have NO information about "{other_zone}". In one or two short sentences, politely explain that you can only
-share information about their own zone ({own_zone}), and that they can ask about it. Do not guess anything about {other_zone}."""
-
-
-# ================= core loop =================
 
 def _call(messages, tools=None):
     kwargs = dict(model=MODEL, messages=messages, think=False,
@@ -326,7 +342,7 @@ def chat_admin(db: Session, message: str, history=None, bcc_ids=None) -> str:
     messages.append({"role": "user", "content": message})
     tool_results = []
     reply = _run(messages, ADMIN_TOOLS, _admin_executors(db, bcc_ids), message, reply_lang, tool_results)
-    allowed = _times_in(" ".join(tool_results)) | _times_in(message)
+    allowed = _times_in(" ".join(tool_results)) | _times_in(message) | _now_times()
     if _times_in(reply) - allowed:  # the model wrote a time that no tool returned
         return UNVERIFIED[reply_lang]
     return reply
@@ -341,12 +357,9 @@ def chat_citizen(db: Session, message: str, zone_id: int) -> str:
         return "Your account is not linked to a valid zone. Please contact STEG."
     reply_lang = REPLY_LANGUAGE[_detect_language(message)]
 
-    # Guard in code: if another zone is named, the model gets NO schedule data at all.
-    other = _other_zone_mentioned(db, message, zone.id)
-    if other:
-        messages = [{"role": "system", "content": _refusal_prompt(zone.name, other, reply_lang)},
-                    {"role": "user", "content": message}]
-        return _run(messages, None, {}, message, reply_lang)
+    # Questions about another zone or other places: fixed answer, the model is not involved at all.
+    if _other_zone_mentioned(db, message, zone.id):
+        return REFUSAL[reply_lang].format(zone=zone.name)
 
     # 1. Facts come from the database, fetched by code (the model cannot skip or alter this step).
     facts = get_zone_schedule(db, zone.id)
