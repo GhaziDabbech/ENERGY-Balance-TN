@@ -454,8 +454,8 @@ def create_execution(payload: ExecutionIn, staff: StaffUser = Depends(get_curren
         _bad(409, f"Only approved cuts can be executed (this one is '{s.status}').")
     if payload.actual_end <= payload.actual_start:
         _bad(400, "actual_end must be after actual_start.")
-        if payload.actual_end.replace(tzinfo=None) > tunis_now().replace(tzinfo=None) + timedelta(minutes=5):
-            _bad(409, "This cut has not finished yet. Log the execution after it ends.")
+    if payload.actual_start.replace(tzinfo=None) > tunis_now().replace(tzinfo=None) + timedelta(minutes=5):
+        _bad(409, "This cut has not started yet. Log the execution once it starts.")
     execution = ExecutionLog(**payload.model_dump())
     s.status = "executed"
     record_execution_on_feeder(s.feeder, payload.actual_start)  # keeps the rotation fair

@@ -127,7 +127,7 @@ python scripts/demo_active_cut.py "Sfax Centre"
 
 ## Reset the demo data
 ```powershell
-docker exec energy-db psql -U postgres -c "DROP DATABASE energy_balance_tn;" -c "CREATE DATABASE energy_balance_tn;"
+docker exec energy-db psql -U postgres -c "DROP DATABASE energy_balance_tn WITH (FORCE);" -c "CREATE DATABASE energy_balance_tn;"
 docker exec energy-db psql -U postgres -d energy_balance_tn -f /schema.sql -f /seed.sql
 ```
 The seed history uses dates relative to the day it is loaded, so it always looks recent.
