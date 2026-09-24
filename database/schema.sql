@@ -342,199 +342,57 @@ CREATE INDEX idx_load_resource_date
     ON load_resource_data(target_date);
 
 
--- ============================================================
--- 11. INITIAL REGIONS
--- ============================================================
-
-INSERT INTO regions (
-    name,
-    code,
-    target_ratio
-)
-VALUES
-    ('North', 'nord', 0.6600),
-    ('South', 'sud', 0.3400);
 
 
 -- ============================================================
--- 12. INITIAL DEMO ZONES
+-- 11. STAFF USERS (DN / CRC / BCC operators / admin)
+-- Each operator has their own login, so every action is traceable
+-- to a person, even when several operators share one BCC computer.
 -- ============================================================
 
-INSERT INTO zones (
-    name,
-    governorate,
-    latitude,
-    longitude,
-    electricity_status
-)
-VALUES
-    ('Sfax Centre', 'Sfax', 34.7406, 10.7603, 'Power Available'),
-    ('Sakiet Ezzit', 'Sfax', 34.8000, 10.7400, 'Power Available'),
-    ('Sakiet Eddaier', 'Sfax', 34.8000, 10.8300, 'High Demand'),
-    ('El Ain', 'Sfax', 34.7300, 10.6900, 'Power Available'),
-    ('Gremda', 'Sfax', 34.7600, 10.7900, 'Scheduled Outage');
+CREATE TABLE staff_users (
+    id SERIAL PRIMARY KEY,
+    full_name VARCHAR(150) NOT NULL,
+    email VARCHAR(255) NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    role VARCHAR(20) NOT NULL,
+    bcc_id INTEGER NULL,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
+    CONSTRAINT fk_staff_bcc
+        FOREIGN KEY (bcc_id)
+        REFERENCES bcc(id)
+        ON UPDATE CASCADE
+        ON DELETE SET NULL,
 
--- ============================================================
--- 13. INITIAL BCC
--- ============================================================
+    CONSTRAINT chk_staff_role
+        CHECK (role IN ('admin', 'dn', 'crc_nord', 'crc_sud', 'bcc')),
 
-INSERT INTO bcc (
-    name,
-    avg_load_mw,
-    crc
-)
-VALUES
-    ('BCC Sfax North', 120.00, 'nord'),
-    ('BCC Sfax South', 100.00, 'sud');
-
-
--- ============================================================
--- 14. INITIAL FEEDERS
--- ============================================================
-
-INSERT INTO feeders (
-    name,
-    bcc_id,
-    zone_id,
-    priority_level,
-    avg_load_mw,
-    total_cuts_month,
-    active
-)
-VALUES
-    (
-        'Feeder Sfax Centre 01',
-        1,
-        1,
-        5,
-        25.00,
-        0,
-        TRUE
-    ),
-    (
-        'Feeder Sakiet Ezzit 01',
-        1,
-        2,
-        4,
-        20.00,
-        0,
-        TRUE
-    ),
-    (
-        'Feeder Sakiet Eddaier 01',
-        1,
-        3,
-        3,
-        22.00,
-        0,
-        TRUE
-    ),
-    (
-        'Feeder El Ain 01',
-        2,
-        4,
-        4,
-        18.00,
-        0,
-        TRUE
-    ),
-    (
-        'Feeder Gremda 01',
-        2,
-        5,
-        2,
-        15.00,
-        0,
-        TRUE
-    );
-
-
--- ============================================================
--- 15. DEMO CITIZEN
--- ============================================================
-
-INSERT INTO citizens (
-    first_name,
-    last_name,
-    email,
-    phone,
-    password_hash,
-    zone_id,
-    governorate
-)
-VALUES (
-    'Mohamed',
-    'Ghazi',
-    'mohamed.ghazi@example.com',
-    '+21600000000',
-    'DEMO_PASSWORD_HASH',
-    1,
-    'Sfax'
+    CONSTRAINT chk_staff_bcc
+        CHECK (role <> 'bcc' OR bcc_id IS NOT NULL)
 );
 
 
 -- ============================================================
--- 16. DATABASE VERIFICATION
+-- 12. AUDIT LOG (who did what, when, and why)
 -- ============================================================
 
-SELECT
-    'regions' AS table_name,
-    COUNT(*) AS row_count
-FROM regions
+CREATE TABLE audit_log (
+    id SERIAL PRIMARY KEY,
+    actor_type VARCHAR(20) NOT NULL,
+    actor_id INTEGER NULL,
+    actor_name VARCHAR(255),
+    action VARCHAR(100) NOT NULL,
+    details TEXT,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
-UNION ALL
+    CONSTRAINT chk_audit_actor
+        CHECK (actor_type IN ('staff', 'citizen', 'system'))
+);
 
-SELECT
-    'zones',
-    COUNT(*)
-FROM zones
+CREATE INDEX idx_staff_email
+    ON staff_users(email);
 
-UNION ALL
-
-SELECT
-    'citizens',
-    COUNT(*)
-FROM citizens
-
-UNION ALL
-
-SELECT
-    'bcc',
-    COUNT(*)
-FROM bcc
-
-UNION ALL
-
-SELECT
-    'feeders',
-    COUNT(*)
-FROM feeders
-
-UNION ALL
-
-SELECT
-    'program_schedule',
-    COUNT(*)
-FROM program_schedule
-
-UNION ALL
-
-SELECT
-    'execution_log',
-    COUNT(*)
-FROM execution_log
-
-UNION ALL
-
-SELECT
-    'national_targets',
-    COUNT(*)
-FROM national_targets
-
-UNION ALL
-
-SELECT
-    'load_resource_data',
-    COUNT(*)
-FROM load_resource_data;
+CREATE INDEX idx_audit_created
+    ON audit_log(created_at);

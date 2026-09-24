@@ -9,6 +9,20 @@ import {
 } from "react-leaflet";
 
 import "leaflet/dist/leaflet.css";
+import AuthScreen from "./AuthScreen.jsx";
+import StaffConsole from "./StaffConsole.jsx";
+import { apiFetch, getToken, setToken, getStaffSession, setStaffSession } from "./api.js";
+
+const EMPTY_CITIZEN = { name: "", zone: "", governorate: "" };
+
+function initials(name) {
+  return (name || "?")
+    .split(" ")
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((word) => word[0].toUpperCase())
+    .join("");
+}
 
 /* =========================================================
    LEAFLET ICON FIX
@@ -26,628 +40,174 @@ L.Icon.Default.mergeOptions({
 });
 
 /* =========================================================
-   FASTAPI CONNECTION
-========================================================= */
-
-const API_BASE_URL = "http://127.0.0.1:8000";
-const DEMO_CITIZEN_ID = 1;
-
-async function apiFetch(path, options = {}) {
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    headers: {
-      "Content-Type": "application/json",
-      ...(options.headers || {}),
-    },
-    ...options,
-  });
-
-  if (!response.ok) {
-    let message = `Backend request failed (${response.status})`;
-
-    try {
-      const errorData = await response.json();
-      message = errorData.detail || message;
-    } catch {
-      // Keep the default message when the backend does not return JSON.
-    }
-
-    throw new Error(message);
-  }
-
-  return response.json();
-}
-
-function normalizeZone(zone) {
-  const rawStatus = String(zone.electricity_status || zone.currentStatus || "Unknown");
-  const normalized = rawStatus.toLowerCase();
-
-  let currentStatus = "unknown";
-  if (normalized.includes("scheduled") || normalized.includes("emergency") || normalized.includes("outage")) {
-    currentStatus = "outage";
-  } else if (normalized.includes("high demand") || normalized.includes("demand")) {
-    currentStatus = "demand";
-  } else if (normalized.includes("available") || normalized.includes("normal")) {
-    currentStatus = "available";
-  }
-
-  return {
-    ...zone,
-    currentStatus,
-    currentStatusLabel:
-      zone.currentStatusLabel || rawStatus,
-    currentDescription:
-      zone.currentDescription ||
-      (currentStatus === "outage"
-        ? "This location is currently experiencing an electricity interruption."
-        : currentStatus === "demand"
-          ? "Electricity is available, but demand is currently high in this location."
-          : currentStatus === "available"
-            ? "Electricity is currently available in this location."
-            : "The current electricity status is not available."),
-    shedding: Array.isArray(zone.shedding) ? zone.shedding : [],
-  };
-}
-
-/* =========================================================
-   MOCK DATA
-   Later this data will come from FastAPI.
-========================================================= */
-
-const citizen = {
-  name: "Mohamed Ghazi",
-  zone: "Sfax Centre",
-  governorate: "Sfax",
-};
-
-/*
-  Every location has:
-  - currentStatus
-  - currentStatusLabel
-  - currentDescription
-  - today's shedding schedule
-*/
-
-const locations = [
-  {
-    id: "tunis-centre",
-    name: "Tunis Centre",
-    governorate: "Tunis",
-    latitude: 36.8065,
-    longitude: 10.1815,
-    currentStatus: "available",
-    currentStatusLabel: "Power Available",
-    currentDescription:
-      "Electricity is currently available in this location.",
-    shedding: [],
-  },
-  {
-    id: "ariana",
-    name: "Ariana",
-    governorate: "Ariana",
-    latitude: 36.8665,
-    longitude: 10.1647,
-    currentStatus: "demand",
-    currentStatusLabel: "High Demand",
-    currentDescription:
-      "Electricity is currently available, but demand is high in this location.",
-    shedding: [
-      {
-        start: "18:00",
-        end: "18:45",
-        duration: "45 min",
-        status: "Planned",
-      },
-    ],
-  },
-  {
-    id: "ben-arous",
-    name: "Ben Arous",
-    governorate: "Ben Arous",
-    latitude: 36.7531,
-    longitude: 10.2282,
-    currentStatus: "available",
-    currentStatusLabel: "Power Available",
-    currentDescription:
-      "Electricity is currently available in this location.",
-    shedding: [],
-  },
-  {
-    id: "nabeul",
-    name: "Nabeul",
-    governorate: "Nabeul",
-    latitude: 36.4513,
-    longitude: 10.7357,
-    currentStatus: "outage",
-    currentStatusLabel: "Currently Under Shedding",
-    currentDescription:
-      "This location is currently experiencing a planned electricity interruption.",
-    shedding: [
-      {
-        start: "14:00",
-        end: "14:45",
-        duration: "45 min",
-        status: "Active now",
-      },
-      {
-        start: "20:00",
-        end: "20:45",
-        duration: "45 min",
-        status: "Planned",
-      },
-    ],
-  },
-  {
-    id: "bizerte",
-    name: "Bizerte Centre",
-    governorate: "Bizerte",
-    latitude: 37.2746,
-    longitude: 9.8739,
-    currentStatus: "available",
-    currentStatusLabel: "Power Available",
-    currentDescription:
-      "Electricity is currently available in this location.",
-    shedding: [],
-  },
-  {
-    id: "beja",
-    name: "Béja",
-    governorate: "Béja",
-    latitude: 36.7256,
-    longitude: 9.1817,
-    currentStatus: "demand",
-    currentStatusLabel: "High Demand",
-    currentDescription:
-      "Electricity is currently available, but demand is high in this location.",
-    shedding: [],
-  },
-  {
-    id: "jendouba",
-    name: "Jendouba",
-    governorate: "Jendouba",
-    latitude: 36.5011,
-    longitude: 8.7802,
-    currentStatus: "available",
-    currentStatusLabel: "Power Available",
-    currentDescription:
-      "Electricity is currently available in this location.",
-    shedding: [],
-  },
-  {
-    id: "kef",
-    name: "Le Kef",
-    governorate: "Le Kef",
-    latitude: 36.1742,
-    longitude: 8.7049,
-    currentStatus: "available",
-    currentStatusLabel: "Power Available",
-    currentDescription:
-      "Electricity is currently available in this location.",
-    shedding: [],
-  },
-  {
-    id: "zaghouan",
-    name: "Zaghouan",
-    governorate: "Zaghouan",
-    latitude: 36.4029,
-    longitude: 10.1429,
-    currentStatus: "available",
-    currentStatusLabel: "Power Available",
-    currentDescription:
-      "Electricity is currently available in this location.",
-    shedding: [],
-  },
-  {
-    id: "siliana",
-    name: "Siliana",
-    governorate: "Siliana",
-    latitude: 36.0849,
-    longitude: 9.3708,
-    currentStatus: "demand",
-    currentStatusLabel: "High Demand",
-    currentDescription:
-      "Electricity is currently available, but demand is high in this location.",
-    shedding: [],
-  },
-  {
-    id: "sousse",
-    name: "Sousse",
-    governorate: "Sousse",
-    latitude: 35.8256,
-    longitude: 10.63699,
-    currentStatus: "available",
-    currentStatusLabel: "Power Available",
-    currentDescription:
-      "Electricity is currently available in this location.",
-    shedding: [],
-  },
-  {
-    id: "monastir",
-    name: "Monastir",
-    governorate: "Monastir",
-    latitude: 35.7643,
-    longitude: 10.8113,
-    currentStatus: "demand",
-    currentStatusLabel: "High Demand",
-    currentDescription:
-      "Electricity is currently available, but demand is high in this location.",
-    shedding: [
-      {
-        start: "16:00",
-        end: "16:45",
-        duration: "45 min",
-        status: "Planned",
-      },
-    ],
-  },
-  {
-    id: "mahdia",
-    name: "Mahdia",
-    governorate: "Mahdia",
-    latitude: 35.5047,
-    longitude: 11.0622,
-    currentStatus: "available",
-    currentStatusLabel: "Power Available",
-    currentDescription:
-      "Electricity is currently available in this location.",
-    shedding: [],
-  },
-  {
-    id: "sfax-centre",
-    name: "Sfax Centre",
-    governorate: "Sfax",
-    latitude: 34.7406,
-    longitude: 10.7603,
-    currentStatus: "available",
-    currentStatusLabel: "Power Available",
-    currentDescription:
-      "Electricity is currently available in this location.",
-    shedding: [
-      {
-        start: "14:00",
-        end: "14:45",
-        duration: "45 min",
-        status: "Planned",
-      },
-      {
-        start: "19:00",
-        end: "19:45",
-        duration: "45 min",
-        status: "Planned",
-      },
-    ],
-  },
-  {
-    id: "sakiet-ezzit",
-    name: "Sakiet Ezzit",
-    governorate: "Sfax",
-    latitude: 34.7867,
-    longitude: 10.7117,
-    currentStatus: "demand",
-    currentStatusLabel: "High Demand",
-    currentDescription:
-      "Electricity is currently available, but demand is high in this location.",
-    shedding: [
-      {
-        start: "16:00",
-        end: "16:45",
-        duration: "45 min",
-        status: "Planned",
-      },
-    ],
-  },
-  {
-    id: "gabes",
-    name: "Gabès",
-    governorate: "Gabès",
-    latitude: 33.8815,
-    longitude: 10.0982,
-    currentStatus: "available",
-    currentStatusLabel: "Power Available",
-    currentDescription:
-      "Electricity is currently available in this location.",
-    shedding: [],
-  },
-  {
-    id: "medenine",
-    name: "Médenine",
-    governorate: "Médenine",
-    latitude: 33.3549,
-    longitude: 10.5055,
-    currentStatus: "demand",
-    currentStatusLabel: "High Demand",
-    currentDescription:
-      "Electricity is currently available, but demand is high in this location.",
-    shedding: [],
-  },
-  {
-    id: "tataouine",
-    name: "Tataouine",
-    governorate: "Tataouine",
-    latitude: 32.9297,
-    longitude: 10.4518,
-    currentStatus: "available",
-    currentStatusLabel: "Power Available",
-    currentDescription:
-      "Electricity is currently available in this location.",
-    shedding: [],
-  },
-  {
-    id: "kebili",
-    name: "Kébili",
-    governorate: "Kébili",
-    latitude: 33.7044,
-    longitude: 8.969,
-    currentStatus: "available",
-    currentStatusLabel: "Power Available",
-    currentDescription:
-      "Electricity is currently available in this location.",
-    shedding: [],
-  },
-  {
-    id: "tozeur",
-    name: "Tozeur",
-    governorate: "Tozeur",
-    latitude: 33.9197,
-    longitude: 8.1335,
-    currentStatus: "demand",
-    currentStatusLabel: "High Demand",
-    currentDescription:
-      "Electricity is currently available, but demand is high in this location.",
-    shedding: [],
-  },
-  {
-    id: "gafsa",
-    name: "Gafsa",
-    governorate: "Gafsa",
-    latitude: 34.425,
-    longitude: 8.7842,
-    currentStatus: "available",
-    currentStatusLabel: "Power Available",
-    currentDescription:
-      "Electricity is currently available in this location.",
-    shedding: [],
-  },
-  {
-    id: "kairouan",
-    name: "Kairouan",
-    governorate: "Kairouan",
-    latitude: 35.6781,
-    longitude: 10.0963,
-    currentStatus: "outage",
-    currentStatusLabel: "Currently Under Shedding",
-    currentDescription:
-      "This location is currently experiencing a planned electricity interruption.",
-    shedding: [
-      {
-        start: "15:00",
-        end: "15:45",
-        duration: "45 min",
-        status: "Active now",
-      },
-    ],
-  },
-  {
-    id: "kasserine",
-    name: "Kasserine",
-    governorate: "Kasserine",
-    latitude: 35.1676,
-    longitude: 8.8365,
-    currentStatus: "available",
-    currentStatusLabel: "Power Available",
-    currentDescription:
-      "Electricity is currently available in this location.",
-    shedding: [],
-  },
-  {
-    id: "sidibouzid",
-    name: "Sidi Bouzid",
-    governorate: "Sidi Bouzid",
-    latitude: 35.0382,
-    longitude: 9.4849,
-    currentStatus: "demand",
-    currentStatusLabel: "High Demand",
-    currentDescription:
-      "Electricity is currently available, but demand is high in this location.",
-    shedding: [],
-  },
-];
-
-/* =========================================================
-   SCHEDULE DATA
-========================================================= */
-
-const personalSchedule = [
-  {
-    id: 1,
-    date: "September 22, 2026",
-    start: "14:00",
-    end: "14:45",
-    duration: "45 min",
-    status: "Planned",
-  },
-  {
-    id: 2,
-    date: "September 22, 2026",
-    start: "19:00",
-    end: "19:45",
-    duration: "45 min",
-    status: "Planned",
-  },
-];
-
-/* =========================================================
-   NOTIFICATIONS
-========================================================= */
-
-const notifications = [
-  {
-    id: 1,
-    title: "Schedule updated",
-    message:
-      "Tomorrow's electricity schedule has been updated.",
-    time: "10 min ago",
-    unread: true,
-  },
-  {
-    id: 2,
-    title: "Planned interruption",
-    message:
-      "Your area has a planned interruption tomorrow at 14:00.",
-    time: "1 hour ago",
-    unread: true,
-  },
-  {
-    id: 3,
-    title: "Energy information",
-    message:
-      "Remember to reduce unnecessary consumption during peak hours.",
-    time: "Yesterday",
-    unread: false,
-  },
-];
-
-/* =========================================================
    APP
 ========================================================= */
 
 function App() {
+  const [token, setTokenState] = useState(getToken());
+  const [staffSession, setStaffSessionState] = useState(getStaffSession());
   const [activePage, setActivePage] = useState("dashboard");
-  const [virtualCheckOpen, setVirtualCheckOpen] = useState(false);
-  const [zones, setZones] = useState([]);
   const [dashboardData, setDashboardData] = useState(null);
   const [backendLoading, setBackendLoading] = useState(true);
   const [backendError, setBackendError] = useState("");
 
+  const logout = () => {
+    setToken(null);
+    setTokenState(null);
+    setDashboardData(null);
+    setActivePage("dashboard");
+  };
+
   useEffect(() => {
+    if (!token) return undefined;
     let cancelled = false;
 
-    async function loadBackendData() {
+    async function loadDashboard() {
       setBackendLoading(true);
       setBackendError("");
-
       try {
-        const [zonesData, dashboard] = await Promise.all([
-          apiFetch("/api/zones"),
-          apiFetch(`/api/citizen/dashboard/${DEMO_CITIZEN_ID}`),
-        ]);
-
-        if (cancelled) return;
-
-        const normalizedZones = (Array.isArray(zonesData) ? zonesData : []).map(normalizeZone);
-        setZones(normalizedZones);
-        setDashboardData(dashboard);
+        const dashboard = await apiFetch("/api/citizen/dashboard", {}, token);
+        if (!cancelled) setDashboardData(dashboard);
       } catch (error) {
         if (cancelled) return;
-        console.error("ENERGY Balance backend connection error:", error);
+        if (error.status === 401) {
+          logout();
+          return;
+        }
         setBackendError(error.message || "Could not connect to the backend.");
       } finally {
         if (!cancelled) setBackendLoading(false);
       }
     }
 
-    loadBackendData();
-
+    loadDashboard();
+    const timer = setInterval(loadDashboard, 60000); // refresh every minute
     return () => {
       cancelled = true;
+      clearInterval(timer);
     };
-  }, []);
+  }, [token]);
 
-  const frontendCitizen = useMemo(() => {
-    const backendCitizen = dashboardData?.citizen;
-    const backendZone = dashboardData?.zone;
-
-    if (!backendCitizen) return citizen;
-
-    const firstName = backendCitizen.first_name || "";
-    const lastName = backendCitizen.last_name || "";
-
+  const citizenData = useMemo(() => {
+    const c = dashboardData?.citizen;
+    if (!c) return EMPTY_CITIZEN;
     return {
-      ...citizen,
-      name:
-        `${firstName} ${lastName}`.trim() ||
-        backendCitizen.name ||
-        citizen.name,
-      zone:
-        backendZone?.name ||
-        dashboardData?.zone?.name ||
-        citizen.zone,
-      governorate:
-        backendZone?.governorate ||
-        backendCitizen.governorate ||
-        citizen.governorate,
+      name: c.name || `${c.first_name} ${c.last_name}`.trim(),
+      zone: dashboardData?.zone?.name || c.zone_name || "",
+      governorate: dashboardData?.zone?.governorate || c.governorate || "",
     };
   }, [dashboardData]);
+
+  const notificationItems = useMemo(() => buildNotifications(dashboardData), [dashboardData]);
+
+  if (staffSession) {
+    return (
+      <StaffConsole
+        session={staffSession}
+        onLogout={() => {
+          setStaffSession(null);
+          setStaffSessionState(null);
+        }}
+      />
+    );
+  }
+
+  if (!token) {
+    return (
+      <AuthScreen
+        onCitizenLogin={(newToken) => {
+          setToken(newToken);
+          setTokenState(newToken);
+        }}
+        onStaffLogin={(session) => {
+          setStaffSession(session);
+          setStaffSessionState(session);
+        }}
+      />
+    );
+  }
 
   return (
     <div className="app-shell">
       <Sidebar
         activePage={activePage}
         setActivePage={setActivePage}
+        citizenData={citizenData}
+        notificationCount={notificationItems.filter((n) => n.unread).length}
+        onLogout={logout}
       />
 
       <main className="main-content">
-        <Topbar
-          activePage={activePage}
-          setActivePage={setActivePage}
-          citizenData={frontendCitizen}
-        />
+        <Topbar activePage={activePage} setActivePage={setActivePage} citizenData={citizenData} />
 
         {backendError && (
-          <div
-            style={{
-              margin: "18px 24px 0",
-              padding: "12px 16px",
-              borderRadius: "12px",
-              background: "#fff7ed",
-              border: "1px solid #fed7aa",
-              color: "#9a3412",
-              fontSize: "14px",
-            }}
-          >
-            Backend connection error: {backendError}. The dashboard is showing demo data.
+          <div className="backend-error-banner">
+            Backend connection error: {backendError}
           </div>
         )}
 
         {activePage === "dashboard" && (
           <Dashboard
             setActivePage={setActivePage}
-            setVirtualCheckOpen={setVirtualCheckOpen}
-            citizenData={frontendCitizen}
+            citizenData={citizenData}
             dashboardData={dashboardData}
             backendLoading={backendLoading}
           />
         )}
 
-        {activePage === "schedule" && <Schedule />}
+        {activePage === "schedule" && <Schedule citizenData={citizenData} dashboardData={dashboardData} />}
 
-        {activePage === "notifications" && (
-          <Notifications />
-        )}
+        {activePage === "notifications" && <Notifications items={notificationItems} />}
 
-        {activePage === "map" && (
-          <EnergyMap locations={zones.length ? zones : locations} />
-        )}
+        {activePage === "map" && <EnergyMap dashboardData={dashboardData} />}
 
-        {activePage === "settings" && <Settings />}
+        {activePage === "settings" && <Settings citizenData={citizenData} onLogout={logout} />}
 
         {activePage === "chat" && <Chatbot />}
       </main>
-
-      {virtualCheckOpen && (
-        <VirtualCheckModal
-          onClose={() => setVirtualCheckOpen(false)}
-          zones={zones.length ? zones : locations}
-        />
-      )}
     </div>
   );
+}
+
+function buildNotifications(dashboardData) {
+  if (!dashboardData) return [];
+  const items = [];
+  const active = dashboardData.current_situation?.active_shedding;
+  if (active) {
+    items.push({
+      id: "active",
+      title: "Interruption in progress",
+      message: `Electricity is cut in ${dashboardData.zone.name} until about ${active.end}.`,
+      time: "Now",
+      unread: true,
+    });
+  }
+  (dashboardData.today_schedule || [])
+    .filter((item) => !item.active)
+    .forEach((item) => {
+      items.push({
+        id: `planned-${item.id}`,
+        title: "Planned interruption",
+        message: `A cut is planned in ${dashboardData.zone.name} on ${item.date} from ${item.start} to ${item.end}.`,
+        time: item.date,
+        unread: true,
+      });
+    });
+  items.push({
+    id: "tip",
+    title: "Energy information",
+    message: "Reduce unnecessary consumption during peak hours (13:00-15:00 and 18:00-22:00).",
+    time: "Tip",
+    unread: false,
+  });
+  return items;
 }
 
 /* =========================================================
    SIDEBAR
 ========================================================= */
 
-function Sidebar({ activePage, setActivePage }) {
+function Sidebar({ activePage, setActivePage, citizenData = EMPTY_CITIZEN, notificationCount = 0, onLogout }) {
   const navigation = [
     {
       id: "dashboard",
@@ -661,7 +221,7 @@ function Sidebar({ activePage, setActivePage }) {
     },
     {
       id: "map",
-      label: "National Grid",
+      label: "My Zone Map",
       icon: "⌖",
     },
     {
@@ -721,9 +281,9 @@ function Sidebar({ activePage, setActivePage }) {
 
             <span>{item.label}</span>
 
-            {item.id === "notifications" && (
+            {item.id === "notifications" && notificationCount > 0 && (
               <span className="notification-badge">
-                2
+                {notificationCount}
               </span>
             )}
           </button>
@@ -742,14 +302,17 @@ function Sidebar({ activePage, setActivePage }) {
 
         <div className="sidebar-user">
           <div className="avatar">
-            MG
+            {initials(citizenData.name)}
           </div>
 
           <div className="sidebar-user-info">
-            <strong>{citizen.name}</strong>
-            <span>{citizen.zone}</span>
+            <strong>{citizenData.name}</strong>
+            <span>{citizenData.zone}</span>
           </div>
         </div>
+        <button className="sidebar-logout" onClick={onLogout}>
+          Log out
+        </button>
       </div>
     </aside>
   );
@@ -762,7 +325,7 @@ function Sidebar({ activePage, setActivePage }) {
 function Topbar({
   activePage,
   setActivePage,
-  citizenData = citizen,
+  citizenData = EMPTY_CITIZEN,
 }) {
   const titles = {
     dashboard: {
@@ -776,9 +339,9 @@ function Topbar({
         "Your electricity interruption schedule",
     },
     map: {
-      title: "National Grid",
+      title: "My Zone Map",
       subtitle:
-        "Explore electricity conditions across Tunisia",
+        "Your zone's location and live status",
     },
     notifications: {
       title: "Notifications",
@@ -845,8 +408,7 @@ function Topbar({
 
 function Dashboard({
   setActivePage,
-  setVirtualCheckOpen,
-  citizenData = citizen,
+  citizenData = EMPTY_CITIZEN,
   dashboardData,
   backendLoading,
 }) {
@@ -878,7 +440,7 @@ function Dashboard({
       <section className="status-card">
         <div className="status-card-left">
           <div className="large-status-icon">
-            ✓
+            {dashboardData?.current_situation?.under_shedding ? "!" : "✓"}
           </div>
 
           <div>
@@ -944,7 +506,7 @@ function Dashboard({
                 : "No shedding scheduled today"}
             </span>
             {dashboardData?.today_schedule?.length ? (
-              <span className="planned-pill">Planned</span>
+              <span className="planned-pill">{dashboardData.today_schedule[0].status}</span>
             ) : null}
           </div>
 
@@ -994,7 +556,7 @@ function Dashboard({
               setActivePage("map")
             }
           >
-            View on national grid →
+            View my zone on the map →
           </button>
         </div>
       </section>
@@ -1016,24 +578,20 @@ function Dashboard({
           <button
             className="quick-action-card"
             onClick={() =>
-              setVirtualCheckOpen(true)
+              setActivePage("schedule")
             }
           >
             <div className="quick-action-icon check-icon">
-              ⌕
+              ◷
             </div>
-
             <div className="quick-action-text">
               <strong>
-                Virtual Check
+                My Schedule
               </strong>
-
               <span>
-                Check any location's current
-                status and today's shedding
+                All planned interruptions in your zone
               </span>
             </div>
-
             <span className="quick-action-arrow">
               →
             </span>
@@ -1050,13 +608,11 @@ function Dashboard({
             </div>
 
             <div className="quick-action-text">
-              <strong>
-                View National Grid
+                            <strong>
+                View My Zone
               </strong>
-
               <span>
-                Explore electricity conditions
-                across Tunisia
+                Your zone's location and live status
               </span>
             </div>
 
@@ -1107,8 +663,8 @@ function Dashboard({
             </h3>
 
             <p>
-              Ask about your schedule, electricity
-              status, or the national grid.
+              Ask about your schedule or your
+              zone's electricity status.
             </p>
 
             <button
@@ -1127,451 +683,53 @@ function Dashboard({
 }
 
 /* =========================================================
-   VIRTUAL CHECK
-========================================================= */
-
-function VirtualCheckModal({ onClose, zones: availableZones = locations }) {
-  const [selectedLocationId, setSelectedLocationId] = useState(
-    String(availableZones[0]?.id ?? "")
-  );
-  const [checkData, setCheckData] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-
-  useEffect(() => {
-    if (!selectedLocationId) return;
-
-    let cancelled = false;
-
-    async function loadVirtualCheck() {
-      setLoading(true);
-      setError("");
-
-      try {
-        const data = await apiFetch(
-          `/api/virtual-check?zone_id=${encodeURIComponent(selectedLocationId)}`
-        );
-
-        if (!cancelled) {
-          setCheckData(data);
-        }
-      } catch (requestError) {
-        if (!cancelled) {
-          console.error("Virtual Check error:", requestError);
-          setError(
-            requestError.message ||
-              "Could not retrieve the selected location information."
-          );
-          setCheckData(null);
-        }
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    }
-
-    loadVirtualCheck();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [selectedLocationId]);
-
-  const selectedFallback =
-    availableZones.find(
-      (location) => String(location.id) === String(selectedLocationId)
-    ) || availableZones[0];
-
-  const selectedLocation = checkData?.zone || selectedFallback || {};
-  const currentSituation = checkData?.current_situation || {};
-  const shedding = Array.isArray(checkData?.upcoming_shedding_today)
-    ? checkData.upcoming_shedding_today
-    : selectedFallback?.shedding || [];
-
-  const currentStatus =
-    currentSituation.status ||
-    selectedLocation.currentStatus ||
-    selectedLocation.electricity_status ||
-    "unknown";
-
-  const currentStatusLabel =
-    currentSituation.status_label ||
-    selectedLocation.currentStatusLabel ||
-    selectedLocation.electricity_status ||
-    "Unknown";
-
-  const currentDescription =
-    currentSituation.description ||
-    selectedLocation.currentDescription ||
-    "No current electricity information is available.";
-
-  const statusColor =
-    currentStatus === "available" ||
-    String(currentStatus).toLowerCase().includes("available")
-      ? "#16a34a"
-      : currentStatus === "demand" ||
-          String(currentStatus).toLowerCase().includes("demand")
-        ? "#f59e0b"
-        : "#dc2626";
-
-  const hasShedding = shedding.length > 0;
-
-  return (
-    <div
-      className="virtual-check-overlay"
-      onClick={onClose}
-    >
-      <div
-        className="virtual-check-modal"
-        onClick={(event) => event.stopPropagation()}
-      >
-        <div className="virtual-check-header">
-          <div className="virtual-check-title">
-            <div className="virtual-check-icon">⌕</div>
-
-            <div>
-              <span>ENERGY BALANCE</span>
-              <h2>Virtual Check</h2>
-            </div>
-          </div>
-
-          <button
-            className="virtual-check-close"
-            onClick={onClose}
-          >
-            ×
-          </button>
-        </div>
-
-        <div className="virtual-location-section">
-          <div>
-            <span className="section-label">
-              SELECT LOCATION
-            </span>
-
-            <h3>Where do you want to check?</h3>
-
-            <p>
-              Select any location to see its current
-              electricity situation and today's
-              shedding schedule.
-            </p>
-          </div>
-
-          <div className="location-select-wrapper">
-            <span className="location-select-icon">⌖</span>
-
-            <select
-              value={selectedLocationId}
-              onChange={(event) =>
-                setSelectedLocationId(event.target.value)
-              }
-            >
-              {availableZones.map((location) => (
-                <option
-                  key={location.id}
-                  value={location.id}
-                >
-                  {location.name}, {location.governorate}
-                </option>
-              ))}
-            </select>
-          </div>
-        </div>
-
-        {error && (
-          <div
-            style={{
-              marginBottom: "16px",
-              padding: "12px 14px",
-              borderRadius: "10px",
-              background: "#fff7ed",
-              border: "1px solid #fed7aa",
-              color: "#9a3412",
-            }}
-          >
-            {error}
-          </div>
-        )}
-
-        <div
-          className="virtual-check-status"
-          style={{
-            borderColor: `${statusColor}33`,
-            background: `${statusColor}0d`,
-          }}
-        >
-          <div
-            className="virtual-check-status-icon"
-            style={{
-              background: statusColor,
-            }}
-          >
-            {loading ? "…" : currentStatus === "outage" ? "!" : "✓"}
-          </div>
-
-          <div>
-            <span>CURRENT SITUATION</span>
-
-            <strong style={{ color: statusColor }}>
-              {loading ? "Loading..." : currentStatusLabel}
-            </strong>
-
-            <p>{currentDescription}</p>
-          </div>
-        </div>
-
-        <div className="virtual-check-grid">
-          <div className="virtual-check-item">
-            <span>LOCATION</span>
-            <strong>{selectedLocation.name || "—"}</strong>
-          </div>
-
-          <div className="virtual-check-item">
-            <span>GOVERNORATE</span>
-            <strong>{selectedLocation.governorate || "—"}</strong>
-          </div>
-
-          <div className="virtual-check-item">
-            <span>DATE</span>
-            <strong>
-              {checkData?.date
-                ? new Date(`${checkData.date}T00:00:00`).toLocaleDateString(
-                    "en-US",
-                    {
-                      month: "long",
-                      day: "numeric",
-                      year: "numeric",
-                    }
-                  )
-                : new Date().toLocaleDateString("en-US", {
-                    month: "long",
-                    day: "numeric",
-                    year: "numeric",
-                  })}
-            </strong>
-          </div>
-
-          <div className="virtual-check-item">
-            <span>TODAY'S INTERRUPTIONS</span>
-            <strong>{checkData?.total_interruptions ?? shedding.length}</strong>
-          </div>
-        </div>
-
-        <div className="virtual-check-section">
-          <div className="virtual-check-section-header">
-            <div>
-              <span className="section-label">TODAY</span>
-
-              <h3>Electricity situation</h3>
-            </div>
-
-            {hasShedding ? (
-              <span className="schedule-count">
-                {shedding.length} interruption
-                {shedding.length > 1 ? "s" : ""}
-              </span>
-            ) : (
-              <span className="no-shedding-pill">
-                No shedding
-              </span>
-            )}
-          </div>
-
-          {!hasShedding ? (
-            <div className="no-shedding">
-              <div className="no-shedding-icon">✓</div>
-
-              <div>
-                <strong>
-                  No upcoming interruption today
-                </strong>
-
-                <p>
-                  No electricity shedding is currently
-                  scheduled for this location today.
-                </p>
-              </div>
-            </div>
-          ) : (
-            <div className="virtual-check-timeline">
-              <div className="virtual-line"></div>
-
-              <div className="virtual-point available">
-                <span></span>
-
-                <div>
-                  <strong>Current situation</strong>
-
-                  <small>
-                    {currentStatusLabel}
-                  </small>
-                </div>
-              </div>
-
-              {shedding.map((item, index) => {
-                const itemStatus =
-                  item.status ||
-                  (item.active ? "Active now" : "Planned");
-
-                const start =
-                  item.start ||
-                  item.start_time ||
-                  "—";
-                const end =
-                  item.end ||
-                  item.end_time ||
-                  "—";
-                const duration =
-                  item.duration ||
-                  `${item.duration_minutes ?? "—"} min`;
-
-                return (
-                  <div
-                    className={`virtual-point ${
-                      itemStatus === "Active now"
-                        ? "active-outage"
-                        : "interruption"
-                    }`}
-                    key={`${start}-${index}`}
-                  >
-                    <span></span>
-
-                    <div className="timeline-event">
-                      <div>
-                        <strong>
-                          {start} – {end}
-                        </strong>
-
-                        <small>
-                          {itemStatus === "Active now"
-                            ? "Interruption active now"
-                            : "Upcoming planned interruption"}
-                        </small>
-                      </div>
-
-                      <span className="timeline-duration">
-                        {duration}
-                      </span>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-
-        <div className="virtual-location-preview">
-          <div className="virtual-location-preview-icon">
-            ⌖
-          </div>
-
-          <div>
-            <span>CHECKED LOCATION</span>
-
-            <strong>{selectedLocation.name || "—"}</strong>
-
-            <small>
-              {selectedLocation.latitude != null &&
-              selectedLocation.longitude != null
-                ? `${Number(selectedLocation.latitude).toFixed(4)}, ${Number(
-                    selectedLocation.longitude
-                  ).toFixed(4)}`
-                : "Coordinates unavailable"}
-            </small>
-          </div>
-        </div>
-
-        <div className="virtual-check-info">
-          <div>ℹ</div>
-
-          <p>
-            This check retrieves the selected location
-            directly from the ENERGY Balance backend.
-            Current status and today's schedule come
-            from the database.
-          </p>
-        </div>
-
-        <button
-          className="virtual-check-done"
-          onClick={onClose}
-        >
-          Done
-        </button>
-      </div>
-    </div>
-  );
-}
-
-/* =========================================================
    SCHEDULE
 ========================================================= */
 
-function Schedule() {
+function Schedule({ citizenData = EMPTY_CITIZEN, dashboardData }) {
+  const items = dashboardData?.today_schedule || [];
   return (
     <div className="page-content">
       <div className="page-intro">
-        <span className="eyebrow">
-          ELECTRICITY SCHEDULE
-        </span>
-
+        <span className="eyebrow">ELECTRICITY SCHEDULE</span>
         <h2>My Schedule</h2>
-
-        <p>
-          Planned electricity interruptions for
-          your registered location.
-        </p>
+        <p>Approved electricity interruptions for your registered zone (today and tomorrow).</p>
       </div>
 
       <div className="schedule-location-card">
-        <div className="schedule-location-icon">
-          ⌖
-        </div>
-
+        <div className="schedule-location-icon">⌖</div>
         <div>
           <span>YOUR REGISTERED LOCATION</span>
           <strong>
-            {citizen.zone}, {citizen.governorate}
+            {citizenData.zone}, {citizenData.governorate}
           </strong>
         </div>
-
-        <span className="location-connected">
-          Connected
-        </span>
+        <span className="location-connected">Connected</span>
       </div>
 
       <div className="schedule-list">
-        {personalSchedule.map((item) => (
-          <div
-            className="schedule-row"
-            key={item.id}
-          >
+        {items.length === 0 && (
+          <div className="schedule-row">
+            <div className="schedule-date">
+              <span>No interruption planned in your zone.</span>
+            </div>
+          </div>
+        )}
+        {items.map((item) => (
+          <div className="schedule-row" key={item.id}>
             <div className="schedule-date">
               <span>{item.date}</span>
             </div>
-
             <div className="schedule-time">
-              <strong>
-                {item.start}
-              </strong>
-
+              <strong>{item.start}</strong>
               <span>to</span>
-
-              <strong>
-                {item.end}
-              </strong>
+              <strong>{item.end}</strong>
             </div>
-
             <div className="schedule-duration">
               <span>Duration</span>
-              <strong>
-                {item.duration}
-              </strong>
+              <strong>{item.duration}</strong>
             </div>
-
-            <span className="planned-pill">
-              {item.status}
-            </span>
+            <span className="planned-pill">{item.status}</span>
           </div>
         ))}
       </div>
@@ -1583,7 +741,7 @@ function Schedule() {
    NOTIFICATIONS
 ========================================================= */
 
-function Notifications() {
+function Notifications({ items = [] }) {
   return (
     <div className="page-content">
       <div className="page-intro">
@@ -1600,7 +758,7 @@ function Notifications() {
       </div>
 
       <div className="notifications-list">
-        {notifications.map((item) => (
+        {items.map((item) => (
           <div
             className={`notification-card ${
               item.unread
@@ -1639,11 +797,27 @@ function Notifications() {
    MAP
 ========================================================= */
 
-function EnergyMap({ locations: mapLocations = locations }) {
-  const center = [
-    33.8869,
-    9.5375,
-  ];
+function EnergyMap({ dashboardData }) {
+  const zone = dashboardData?.zone;
+  const situation = dashboardData?.current_situation;
+  const mapLocations =
+    zone && zone.latitude != null
+      ? [
+          {
+            id: zone.id,
+            name: zone.name,
+            latitude: zone.latitude,
+            longitude: zone.longitude,
+            currentStatus: situation?.status || "unknown",
+            currentStatusLabel: situation?.status_label || zone.electricity_status,
+            currentDescription: situation?.description || "",
+            shedding: dashboardData?.today_schedule || [],
+          },
+        ]
+      : [];
+  const center = mapLocations.length
+    ? [mapLocations[0].latitude, mapLocations[0].longitude]
+    : [33.8869, 9.5375];
 
   const getStatusColor = (status) => {
     switch (status) {
@@ -1694,14 +868,14 @@ function EnergyMap({ locations: mapLocations = locations }) {
       <div className="map-header">
         <div>
           <span className="eyebrow">
-            NATIONAL GRID
+            MY ZONE
           </span>
 
           <h2>Electricity Map</h2>
 
           <p>
-            Explore electricity conditions
-            across Tunisia using live backend zone data.
+            Your registered zone and its live
+            electricity status.
           </p>
         </div>
 
@@ -1713,8 +887,9 @@ function EnergyMap({ locations: mapLocations = locations }) {
 
       <div className="real-map-wrapper">
         <MapContainer
+          key={center.join(",")}
           center={center}
-          zoom={6}
+          zoom={mapLocations.length ? 13 : 6}
           minZoom={5}
           maxZoom={18}
           scrollWheelZoom={true}
@@ -1781,8 +956,7 @@ function EnergyMap({ locations: mapLocations = locations }) {
                     {location.shedding.length ===
                     0 ? (
                       <span>
-                        No shedding scheduled
-                        today.
+                        No interruption planned.
                       </span>
                     ) : (
                       <>
@@ -1866,38 +1040,42 @@ function Chatbot() {
       id: 1,
       role: "assistant",
       text:
-        "Hello! I’m the ENERGY Balance Assistant. Ask me about your electricity schedule, current status, or the national grid.",
+        "Hello! I’m the ENERGY Balance Assistant. Ask me when the electricity will be cut or come back in your zone. You can write in French, Arabic, English or Tunisian Derja.",
     },
   ]);
 
   const [input, setInput] = useState("");
+  const [sending, setSending] = useState(false);
 
-  const sendMessage = () => {
-    const trimmed =
-      input.trim();
+  const sendMessage = async (text) => {
+    const trimmed = (text ?? input).trim();
+    if (!trimmed || sending) return;
 
-    if (!trimmed) return;
-
-    const userMessage = {
-      id: Date.now(),
-      role: "user",
-      text: trimmed,
-    };
-
-    const assistantMessage = {
-      id: Date.now() + 1,
-      role: "assistant",
-      text:
-        "I received your question. Once connected to the ENERGY Balance backend, I will retrieve verified electricity information for your selected area.",
-    };
-
-    setMessages((previous) => [
-      ...previous,
-      userMessage,
-      assistantMessage,
-    ]);
-
+    setMessages((previous) => [...previous, { id: Date.now(), role: "user", text: trimmed }]);
     setInput("");
+    setSending(true);
+
+    try {
+      const data = await apiFetch("/api/chat/citizen", {
+        method: "POST",
+        body: JSON.stringify({ message: trimmed }),
+      });
+      setMessages((previous) => [...previous, { id: Date.now() + 1, role: "assistant", text: data.reply }]);
+    } catch (error) {
+      setMessages((previous) => [
+        ...previous,
+        {
+          id: Date.now() + 1,
+          role: "assistant",
+          text:
+            error.status === 401
+              ? "Your session expired. Please log in again."
+              : "The assistant is not available right now. Please try again in a moment.",
+        },
+      ]);
+    } finally {
+      setSending(false);
+    }
   };
 
   const handleKeyDown = (event) => {
@@ -1962,35 +1140,29 @@ function Chatbot() {
               </div>
             </div>
           ))}
+          {sending && (
+            <div className="chat-message assistant">
+              <div className="chat-message-avatar">✦</div>
+              <div className="chat-bubble chat-typing">Thinking…</div>
+            </div>
+          )}
         </div>
 
         <div className="chat-suggestions">
           <button
-            onClick={() =>
-              setInput(
-                "What is my electricity schedule today?"
-              )
-            }
+            onClick={() => sendMessage("What is my electricity schedule today?")}
           >
             My schedule
           </button>
 
           <button
-            onClick={() =>
-              setInput(
-                "Is electricity currently available?"
-              )
-            }
+            onClick={() => sendMessage("Is electricity currently available?")}
           >
             Current status
           </button>
 
           <button
-            onClick={() =>
-              setInput(
-                "Are there upcoming interruptions?"
-              )
-            }
+            onClick={() => sendMessage("Are there upcoming interruptions?")}
           >
             Upcoming interruptions
           </button>
@@ -2007,7 +1179,8 @@ function Chatbot() {
           />
 
           <button
-            onClick={sendMessage}
+            onClick={() => sendMessage()}
+            disabled={sending}
           >
             →
           </button>
@@ -2021,7 +1194,7 @@ function Chatbot() {
    SETTINGS
 ========================================================= */
 
-function Settings() {
+function Settings({ citizenData = EMPTY_CITIZEN, onLogout }) {
   const [notificationsEnabled, setNotificationsEnabled] =
     useState(true);
 
@@ -2042,17 +1215,17 @@ function Settings() {
       <div className="settings-card">
         <div className="settings-profile">
           <div className="settings-avatar">
-            MG
+            {initials(citizenData.name)}
           </div>
 
           <div>
             <span>ACCOUNT</span>
 
-            <h3>{citizen.name}</h3>
+            <h3>{citizenData.name}</h3>
 
             <p>
-              {citizen.zone},{" "}
-              {citizen.governorate}
+              {citizenData.zone},{" "}
+              {citizenData.governorate}
             </p>
           </div>
         </div>
@@ -2084,6 +1257,17 @@ function Settings() {
             }
           >
             <span></span>
+          </button>
+        </div>
+        <div className="settings-divider"></div>
+
+        <div className="settings-row">
+          <div>
+            <strong>Log out</strong>
+            <span>End your session on this device.</span>
+          </div>
+          <button className="settings-logout" onClick={onLogout}>
+            Log out
           </button>
         </div>
       </div>
