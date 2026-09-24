@@ -8,7 +8,7 @@ Security by design:
 import json
 import os
 import re
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 import ollama
 from sqlalchemy.orm import Session
@@ -201,6 +201,15 @@ ADMIN_TOOLS = [
         "description": "List the power cuts happening right now or coming up (validated or active): zone, region, feeder, start and end time. Needs no dates. Use it for any question like 'which zones are cut' or 'where is the electricity cut'.",
         "parameters": {"type": "object", "properties": {}}}},
     {"type": "function", "function": {
+        "name": "propose_cuts",
+        "description": "Run the fairness engine to PROPOSE cuts for one BCC and time slot. Creates proposals only: an operator must approve them in the 'Proposed cuts' list. Use it when the user asks to suggest or propose cuts.",
+        "parameters": {"type": "object", "properties": {
+            "target_mw": {"type": "number", "description": "MW to shed"},
+            "start_time": {"type": "string", "description": "HH:MM, 24h"},
+            "date": {"type": "string", "description": "YYYY-MM-DD, default today"},
+            "bcc_name": {"type": "string", "description": "e.g. BCC Sfax. Optional for a BCC operator (own BCC)"}},
+            "required": ["target_mw", "start_time"]}}},
+    {"type": "function", "function": {
         "name": "get_selection_reason",
         "description": "Explain the fairness factors of one feeder (depart MT): priority level (0-5), days since last cut, load weight and cuts this month. Use it for questions like 'why was this feeder chosen'.",
         "parameters": {"type": "object", "properties": {
@@ -229,10 +238,37 @@ ADMIN_TOOLS = [
             "required": ["period_start", "period_end"]}}},
 ]
 
-def _admin_executors(db: Session, bcc_ids):
+def _propose_cuts(db, staff, a):
+    """Same engine and rules as the 'Run the fairness engine' button (lazy import avoids a circular import)."""
+    from fastapi import HTTPException
+    from main import ProposalIn, create_proposal
+    from models import BCC
+    if staff is None:
+        return {"error": "Not allowed."}
+    name = (a.get("bcc_name") or "").strip()
+    bcc = db.query(BCC).filter(BCC.name.ilike(f"%{name}%")).first() if name else (staff.bcc if staff.bcc_id else None)
+    if not bcc:
+        return {"error": "Tell me which BCC, e.g. BCC Sfax."}
+    try:
+        payload = ProposalIn(bcc_id=bcc.id, target_mw=float(a.get("target_mw", 0)),
+                             scheduled_date=a.get("date") or tunis_now().date().isoformat(),
+                             start_time=a.get("start_time", ""))
+        res = create_proposal(payload, staff, db)
+    except HTTPException as e:
+        return {"error": e.detail}
+    except Exception as e:
+        return {"error": f"Invalid request: {e}"}
+    end = (datetime.combine(payload.scheduled_date, payload.start_time) + timedelta(minutes=45)).strftime("%H:%M")
+    return {"status": "proposed, waiting for operator approval in the 'Proposed cuts' list", "bcc": bcc.name,
+            "date": payload.scheduled_date.isoformat(), "start": payload.start_time.strftime("%H:%M"), "end": end,
+            "total_mw": res["total_mw"], "feeders": [c["feeder_name"] for c in res["created"]]}
+
+
+def _admin_executors(db: Session, bcc_ids, staff=None):
     """Tools for the admin chatbot, bound to this request's DB session and the staff member's scope."""
     return {
         "list_active_cuts": lambda a: list_active_cuts(db, bcc_ids),
+        "propose_cuts": lambda a: _propose_cuts(db, staff, a),
         "get_selection_reason": lambda a: get_selection_reason(db, a.get("feeder_name", ""), bcc_ids),
         "get_kpi": lambda a: get_kpi(db, a.get("region"), a.get("period_start", ""), a.get("period_end", ""), bcc_ids),
         "list_stale_feeders": lambda a: list_stale_feeders(db, int(a.get("days", 30) or 30), bcc_ids),
@@ -263,6 +299,8 @@ Rules:
 - If the user gives no dates, use the current month: {month_start.isoformat()} to {today.isoformat()}.
 - For any question about which zones are cut, call list_active_cuts immediately. Never ask the user for dates for that.
 - Regions are 'nord' and 'sud'. Feeders are named like Depart_SfaxCentre_1. Critical feeders (hospitals, water pumping) have priority 0 and are never cut.
+- If asked to suggest or propose cuts, call propose_cuts. Then list the proposed feeders and remind the user
+  that the proposals must be approved in the 'Proposed cuts' list: you never approve cuts yourself.
 - If a tool returns an error or nothing, say so plainly.
 - If the message is only a greeting, greet back briefly and say what you can help with.
 - Never mention tool names.
@@ -335,16 +373,30 @@ def _run(messages, tools, executors, user_message, reply_lang, collected=None):
         print(f"[chat error] {type(e).__name__}: {e}")  # visible in the server log
         return TIMEOUT_REPLY
 
+def _format_cuts(tool_results, lang):
+    """If the model's answer can't be verified, write the list of cuts from the data itself."""
+    for raw in reversed(tool_results):
+        data = json.loads(raw)
+        if "cuts" not in data:
+            continue
+        if not data["cuts"]:
+            return {"English": "No cut is active or upcoming.", "French": "Aucune coupure en cours ou à venir.",
+                    "Arabic": "لا يوجد أي قطع جارٍ أو قادم."}[lang]
+        now_word = {"English": "active now", "French": "en cours", "Arabic": "جارٍ الآن"}[lang]
+        soon_word = {"English": "upcoming", "French": "à venir", "Arabic": "قادم"}[lang]
+        return " | ".join(f"{c['zone']} ({c['feeder']}): {c['start']}-{c['end']}, "
+                          f"{now_word if c['status'] == 'active now' else soon_word}" for c in data["cuts"])
+    return None
 
-def chat_admin(db: Session, message: str, history=None, bcc_ids=None) -> str:
+def chat_admin(db: Session, message: str, history=None, bcc_ids=None, staff=None) -> str:
     reply_lang = REPLY_LANGUAGE[_detect_language(message)]
     messages = [{"role": "system", "content": _admin_prompt(reply_lang)}] + (history or [])
     messages.append({"role": "user", "content": message})
     tool_results = []
-    reply = _run(messages, ADMIN_TOOLS, _admin_executors(db, bcc_ids), message, reply_lang, tool_results)
+    reply = _run(messages, ADMIN_TOOLS, _admin_executors(db, bcc_ids, staff), message, reply_lang, tool_results)
     allowed = _times_in(" ".join(tool_results)) | _times_in(message) | _now_times()
     if _times_in(reply) - allowed:  # the model wrote a time that no tool returned
-        return UNVERIFIED[reply_lang]
+        return _format_cuts(tool_results, reply_lang) or UNVERIFIED[reply_lang]
     return reply
 
 

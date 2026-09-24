@@ -357,10 +357,27 @@ def create_proposal(payload: ProposalIn, staff: StaffUser = Depends(get_current_
     """The engine PROPOSES cuts (status 'planned'). A BCC operator must approve them before they happen."""
     _check_bcc_access(db, staff, payload.bcc_id)
     end_dt = datetime.combine(payload.scheduled_date, payload.start_time) + timedelta(minutes=payload.duration_minutes)
+    if datetime.combine(payload.scheduled_date, payload.start_time) < tunis_now().replace(tzinfo=None):
+        _bad(400, "This start time is already in the past. Choose a future time.")
     if end_dt.date() != payload.scheduled_date:
         _bad(400, "A cut cannot cross midnight. Choose an earlier start time.")
-    feeders = db.query(Feeder).filter(Feeder.bcc_id == payload.bcc_id).all()
-    selected = select_feeders(payload.target_mw, feeders)
+    overlapping = (db.query(ProgramSchedule).join(Feeder, ProgramSchedule.feeder_id == Feeder.id)
+                   .filter(Feeder.bcc_id == payload.bcc_id,
+                           ProgramSchedule.scheduled_date == payload.scheduled_date,
+                           ProgramSchedule.status.in_(("planned", "approved", "active")),
+                           ProgramSchedule.start_time < end_dt.time(),
+                           ProgramSchedule.end_time > payload.start_time).all())
+    for s in overlapping:
+        if s.status == "planned":  # a new run replaces the proposals nobody approved yet
+            s.status = "cancelled"
+    approved_mw = sum(float(s.target_mw) for s in overlapping if s.status in ("approved", "active"))
+    remaining_mw = round(payload.target_mw - approved_mw, 2)
+    if remaining_mw <= 0:
+        _bad(409, f"Target already covered: {approved_mw:.2f} MW of cuts are already approved for this slot.")
+    busy_ids = {s.feeder_id for s in overlapping if s.status in ("approved", "active")}
+    feeders = [f for f in db.query(Feeder).filter(Feeder.bcc_id == payload.bcc_id).all()
+               if f.id not in busy_ids]
+    selected = select_feeders(remaining_mw, feeders)
     if not selected:
         _bad(409, "No eligible feeder (all are critical, inactive or in cooldown).")
     created = []
@@ -437,6 +454,8 @@ def create_execution(payload: ExecutionIn, staff: StaffUser = Depends(get_curren
         _bad(409, f"Only approved cuts can be executed (this one is '{s.status}').")
     if payload.actual_end <= payload.actual_start:
         _bad(400, "actual_end must be after actual_start.")
+        if payload.actual_end.replace(tzinfo=None) > tunis_now().replace(tzinfo=None) + timedelta(minutes=5):
+            _bad(409, "This cut has not finished yet. Log the execution after it ends.")
     execution = ExecutionLog(**payload.model_dump())
     s.status = "executed"
     record_execution_on_feeder(s.feeder, payload.actual_start)  # keeps the rotation fair
@@ -473,4 +492,23 @@ def audit_log(limit: int = Query(100, ge=1, le=1000), staff: StaffUser = Depends
 def chat_admin_endpoint(payload: ChatIn, staff: StaffUser = Depends(get_current_staff), db: Session = Depends(get_db)):
     from chatbot.chat import chat_admin
     history = [m for m in (payload.history or [])[-6:] if m.get("role") in ("user", "assistant")]
-    return {"reply": chat_admin(db, payload.message, history, allowed_bcc_ids(db, staff))}
+    return {"reply": chat_admin(db, payload.message, history, allowed_bcc_ids(db, staff), staff)}
+class CancelIn(BaseModel):
+    confirmation: str
+    reason: Optional[str] = None
+
+
+@app.post("/api/admin/schedules/{schedule_id}/cancel")
+def cancel_schedule(schedule_id: int, payload: CancelIn, staff: StaffUser = Depends(get_current_staff),
+                    db: Session = Depends(get_db)):
+    """Remove an approved cut before it is executed. The operator must type I CONFIRM."""
+    if payload.confirmation.strip().upper() != "I CONFIRM":
+        _bad(400, 'Type "I CONFIRM" to cancel this cut.')
+    s = db.get(ProgramSchedule, schedule_id) or _bad(404, "Schedule not found")
+    _check_bcc_access(db, staff, s.feeder.bcc_id)
+    if s.status not in ("approved", "active"):
+        _bad(409, f"Only approved cuts can be cancelled (this one is '{s.status}').")
+    s.status = "cancelled"
+    audit(db, staff, "approved_cut_cancelled", f"schedule={s.id} feeder={s.feeder.name} reason={payload.reason or '-'}")
+    db.commit()
+    return {"cancelled": s.id}

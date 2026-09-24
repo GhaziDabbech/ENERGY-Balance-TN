@@ -36,21 +36,27 @@ export default function StaffConsole({ session, onLogout }) {
   const [bccs, setBccs] = useState([]);
   const [planned, setPlanned] = useState([]);
   const [approved, setApproved] = useState([]);
+  const [executed, setExecuted] = useState([]);
   const [kpis, setKpis] = useState([]);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
 
   const refresh = useCallback(async () => {
     try {
-      const [p, a] = await Promise.all([
+      const [p, a, e] = await Promise.all([
         call("/api/admin/schedules?status=planned"),
         call("/api/admin/schedules?status=approved"),
+        call(`/api/admin/schedules?status=executed&target_date=${todayISO()}`),
       ]);
       setPlanned(p);
       setApproved(a);
-      const regions = staff.role === "crc_nord" ? ["nord"] : staff.role === "crc_sud" ? ["sud"] : ["nord", "sud"];
+      setExecuted(e);
+      const regions =
+        staff.role === "crc_nord" ? ["nord"] : staff.role === "crc_sud" ? ["sud"] : staff.role === "bcc" ? [null] : ["nord", "sud"];
       const results = await Promise.all(
-        regions.map((r) => call(`/api/admin/kpi?period_start=${monthAgoISO()}&period_end=${todayISO()}&region=${r}`)),
+        regions.map((r) =>
+          call(`/api/admin/kpi?period_start=${monthAgoISO()}&period_end=${todayISO()}${r ? `&region=${r}` : ""}`),
+        ),
       );
       setKpis(results);
     } catch (err) {
@@ -105,7 +111,14 @@ export default function StaffConsole({ session, onLogout }) {
         }),
       `Execution of cut #${s.id} logged. The feeder's rotation history was updated.`,
     );
-
+  const cancelCut = (s) => {
+    const typed = window.prompt(`Cancel the cut of ${s.feeder_name} (${s.start_time}-${s.end_time})?\nType I CONFIRM to proceed.`);
+    if (typed === null) return;
+    act(
+      () => call(`/api/admin/schedules/${s.id}/cancel`, { method: "POST", body: JSON.stringify({ confirmation: typed }) }),
+      `Cut #${s.id} cancelled.`,
+    );
+  };
   return (
     <div className="staff-page">
       <header className="staff-header">
@@ -130,8 +143,10 @@ export default function StaffConsole({ session, onLogout }) {
 
       <section className="staff-kpis">
         {kpis.map((k) => (
-          <div className="dashboard-card staff-kpi" key={k.region}>
-            <span className="card-label">{k.region === "nord" ? "CRC NORD" : "CRC SUD"} · LAST 30 DAYS</span>
+          <div className="dashboard-card staff-kpi" key={k.region || "bcc"}>
+            <span className="card-label">
+              {k.region === "nord" ? "CRC NORD" : k.region === "sud" ? "CRC SUD" : (staff.bcc_name || "MY BCC").toUpperCase()} · LAST 30 DAYS
+            </span>
             <div className="staff-kpi-values">
               <div>
                 <strong>{Math.round(k.fairness_score * 100)}%</strong>
@@ -191,14 +206,35 @@ export default function StaffConsole({ session, onLogout }) {
                   </span>
                 </div>
                 <div className="staff-row-actions">
-                  <button className="staff-approve" onClick={() => logExecution(s)}>Log execution</button>
+                  {new Date(`${s.scheduled_date}T${s.start_time}`) <= new Date() ? (
+                    <button className="staff-approve" onClick={() => logExecution(s)}>Log execution</button>
+                  ) : (
+                    <span className="staff-empty">Log from {s.start_time}</span>
+                  )}
+                  <button className="staff-reject" onClick={() => cancelCut(s)}>Cancel</button>
+                </div>
+              </div>
+            ))}
+          </div>
+          
+          <div className="dashboard-card">
+            <span className="card-label">DONE TODAY</span>
+            <h3 className="staff-title">Executed today ({executed.length})</h3>
+            {executed.length === 0 && <p className="staff-empty">No execution logged today.</p>}
+            {executed.map((s) => (
+              <div className="staff-row" key={s.id}>
+                <div className="staff-row-main">
+                  <strong>{s.feeder_name}</strong>
+                  <span>
+                    {s.zone_name} · {s.start_time}–{s.end_time} · {s.target_mw} MW
+                  </span>
                 </div>
               </div>
             ))}
           </div>
         </div>
 
-        <AdminAssistant call={call} />
+                <AdminAssistant call={call} onDone={refresh} />
       </div>
     </div>
   );
@@ -248,7 +284,7 @@ function ProposalForm({ bccs, staff, call, onDone, onError }) {
         </label>
         <label>
           Date
-          <input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+          <input type="date" min={todayISO()} value={date} onChange={(e) => setDate(e.target.value)} />
         </label>
         <label>
           Start
@@ -261,7 +297,7 @@ function ProposalForm({ bccs, staff, call, onDone, onError }) {
   );
 }
 
-function AdminAssistant({ call }) {
+function AdminAssistant({ call, onDone }) {
   const [messages, setMessages] = useState([
     {
       role: "assistant",
@@ -284,6 +320,7 @@ function AdminAssistant({ call }) {
         body: JSON.stringify({ message: question, history }),
       });
       setMessages((m) => [...m, { role: "assistant", content: data.reply }]);
+      if (onDone) onDone(); // the assistant may have created proposals      
     } catch {
       setMessages((m) => [...m, { role: "assistant", content: "The assistant is not available right now." }]);
     } finally {
