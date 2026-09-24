@@ -1,93 +1,142 @@
-# ENERGY Balance TN — Citizens Dashboard
+# ENERGY Balance TN
 
-## Overview
+**National intelligent load-shedding management platform** · PESTGM 7.0 Tech Challenge, Track 2
+IEEE IAS/IES/PES ESPRIT Student Branch Joint Chapter × STEG
 
-The **Citizens Dashboard** is the citizen-facing web interface of **ENERGY Balance TN**. It provides citizens with a simple way to monitor electricity conditions, view planned shedding schedules, check other locations, and receive electricity-related information.
+When electricity demand exceeds supply, STEG must cut power to some areas and rotate the cuts
+("délestage tournant"). Today this is coordinated manually between the Dispatching National (DN),
+the two regional centres (CRC Nord / CRC Sud) and the 7 local bureaus (BCC). ENERGY Balance TN
+digitizes that chain, keeps the rotation fair, keeps a human in control of every cut, and tells each
+citizen clearly what is happening in *their* zone.
 
-## Main Features
+## What the platform does
 
-### Citizens Dashboard
+```
+DN  ── national deficit per time slot (J-1 program)
+ │
+ ├─ CRC Nord / CRC Sud ── regional split (default 66% / 34%, adjustable)
+ │     │
+ │     └─ 7 BCC ── fairness engine PROPOSES feeders → operator APPROVES / REJECTS → operator LOGS execution
+ │
+ └─ Citizens ── own zone only: live status, schedule, map, AI assistant
+```
 
-The main dashboard provides:
+- **Fairness engine**: each feeder gets a score = 45% priority + 25% time since last cut
+  + 20% fewer cuts in the last 30 days − 10% load. Hard rules: priority-0 feeders (hospitals, water
+  pumping) are never cut, maximum 45 minutes per cut, 4-hour anti-repetition cooldown.
+- **Human in the loop**: the engine only *proposes* (`planned`). A BCC operator approves each cut
+  before it exists for citizens. Executions update the feeder history, so the rotation really rotates.
+- **Privacy by design**: a citizen logs in and only ever sees their own zone (dashboard, map, chatbot).
+  Showing every zone side by side could make fair rotation look unfair, so it is not exposed.
+- **Traceability**: every operator has their own login (even on a shared BCC computer) and every
+  action is written to the audit log (who, when, what).
+- **KPIs**: energy not supplied (ENS) and a fairness score per region.
+- **AI assistants** (local model, no cloud, no cost):
+  - *Citizen*: "When will my electricity come back?", in French, Arabic, English or Tunisian Derja.
+    It has no way to read another zone's data, even if asked.
+  - *Staff*: "Which zones are cut now?", "Why was Depart_SfaxCentre_2 chosen?", "Compare nord and sud".
+    Answers come only from live platform data, limited to the operator's own BCC or region.
+- **No SCADA/EMS/DMS integration** (out of scope by design): execution data is entered by operators.
 
-- Citizen profile information
-- Current electricity situation
-- Today's electricity schedule
-- Notifications
-- Quick access to important services
+## Tech stack
 
-### Electricity Schedule
+| Part | Technology |
+|---|---|
+| Frontend | React + Vite, Leaflet (OpenStreetMap) |
+| Backend | FastAPI (Python), SQLAlchemy |
+| Database | PostgreSQL |
+| Auth | PBKDF2 password hashing + signed tokens (Python standard library) |
+| AI | Ollama running `qwen3:8b` locally, with tool calling |
 
-Citizens can view their electricity interruption schedule, including:
+## Project structure
 
-- Scheduled date
-- Start time
-- End time
-- Duration
-- Current status
-- Reason for the interruption
+```
+database/
+  schema.sql            tables, constraints, indexes
+  seed.sql              demo data (generated, see below)
+backend/
+  main.py               API routes
+  logic.py              fairness engine, allocation, KPIs (shared by API and chatbot)
+  models.py             database models
+  auth.py               passwords, tokens, role checks
+  database.py           connection
+  chatbot/tools.py      read-only tools the AI can call
+  chatbot/chat.py       chat engine (language detection, guards, fallbacks)
+  scripts/generate_seed.py   rebuilds database/seed.sql
+  scripts/demo_active_cut.py creates a live cut for demos
+energy-balance-frontend/
+  src/App.jsx           citizen portal
+  src/AuthScreen.jsx    entry screen (Citizen / Staff)
+  src/StaffConsole.jsx  operator console + staff AI assistant
+  src/api.js            backend connection
+```
 
-### Virtual Check
+## Run it locally (Windows PowerShell)
 
-The **Virtual Check** allows a citizen to select any location in Tunisia and check:
+**Requirements:** Docker Desktop, Python 3.10+, Node.js 20+, Ollama.
 
-- The current electricity situation in the selected location
-- Whether shedding is currently active
-- Upcoming shedding for the same day
-- Scheduled start time
-- Scheduled end time
-- Duration of the planned interruption
+**1. Database** (PostgreSQL in Docker, from the project root)
+```powershell
+docker run -d --name energy-db -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=energy_balance_tn -p 5432:5432 postgres:16
+docker cp database/schema.sql energy-db:/schema.sql
+docker cp database/seed.sql energy-db:/seed.sql
+docker exec energy-db psql -U postgres -d energy_balance_tn -f /schema.sql -f /seed.sql
+```
+If port 5432 is already used on your PC, use `-p 5433:5432` and put `5433` in `DATABASE_URL`.
+Next time, just run `docker start energy-db`.
 
-This allows citizens to check locations other than their own registered area.
+**2. AI model**
+```powershell
+ollama pull qwen3:8b
+```
 
-### Interactive Map
+**3. Backend**
+```powershell
+cd backend
+pip install -r requirements.txt
+copy .env.example .env
+python -m uvicorn main:app --reload
+```
+API docs: http://127.0.0.1:8000/docs
 
-The dashboard includes an interactive map covering Tunisia.
+**4. Frontend** (new terminal)
+```powershell
+cd energy-balance-frontend
+npm install
+npm run dev
+```
+Open http://localhost:5173
 
-Citizens can explore electricity zones geographically and view the electricity situation associated with each zone.
+**5. Live cut for a demo** (optional, from `backend`)
+```powershell
+python scripts/demo_active_cut.py "Sfax Centre"
+```
 
-The map uses **Leaflet** and **OpenStreetMap** for geographic visualization.
+## Demo accounts
 
-> **Note:** The electricity statuses displayed in the current dashboard are development/demo data and are not official STÉG outage information.
+| Role | Email | Password |
+|---|---|---|
+| Citizen (Sfax Centre) | mohamed.ghazi@example.com | Citizen2026! |
+| Citizen (Menzah) | idriss@example.com | Citizen2026! |
+| Citizen (Gabes Ville) | amina@example.com | Citizen2026! |
+| Administrator | admin@steg.tn | Steg2026! |
+| Dispatching National | dn@steg.tn | Steg2026! |
+| CRC Nord / CRC Sud | crc.nord@steg.tn / crc.sud@steg.tn | Steg2026! |
+| BCC Tunis operator | bcc.tunis@steg.tn | Steg2026! |
+| BCC Sfax operators (shared PC) | bcc.sfax@steg.tn / bcc.sfax2@steg.tn | Steg2026! |
 
-### Notifications
+## Reset the demo data
+```powershell
+docker exec energy-db psql -U postgres -c "DROP DATABASE energy_balance_tn WITH (FORCE);" -c "CREATE DATABASE energy_balance_tn;"
+docker exec energy-db psql -U postgres -d energy_balance_tn -f /schema.sql -f /seed.sql
+```
+The seed history uses dates relative to the day it is loaded, so it always looks recent.
+To change the demo network, edit `backend/scripts/generate_seed.py` and run it again.
 
-The dashboard provides electricity-related notifications such as:
+## Team
 
-- Schedule updates
-- Planned interruptions
-- Energy information
-
-### Settings
-
-The citizen dashboard includes a settings section for managing the user's dashboard preferences and profile-related information.
-
-### Citizen Assistant
-
-A chatbot interface is included in the dashboard as a placeholder for the future citizen AI assistant.
-
-The future assistant will retrieve verified information from the **ENERGY Balance TN** backend, such as electricity schedules and information about a citizen's selected area.
-
-## Frontend Technologies
-
-The Citizens Dashboard is built with:
-
-- React
-- Vite
-- JavaScript
-- CSS
-- Leaflet
-- React Leaflet
-
-## Backend Integration
-
-The dashboard is designed to communicate with the **ENERGY Balance TN** backend through **FastAPI APIs**.
-
-The main citizen-related endpoints include:
-
-```text
-GET /api/citizen/dashboard/{citizen_id}
-GET /api/zones
-GET /api/zones/{zone_id}
-GET /api/virtual-check?zone_id={zone_id}
-GET /api/schedules
+| Area | Member |
+|---|---|
+| Data model & fairness engine | Teammate 1 |
+| Backend API & citizen dashboard | Mohamed Ghazi Dabbech |
+| AI chatbots, integration, security | Idriss |
