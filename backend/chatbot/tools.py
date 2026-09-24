@@ -3,7 +3,9 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
 from functions import explain_selection, compute_kpi, supabase
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+
+TUNIS = timezone(timedelta(hours=1))  # Tunisia is UTC+1 all year
 
 
 # ---------- helpers ----------
@@ -168,6 +170,47 @@ def get_zone_schedule(zone_id: str) -> dict:
         return {"error": str(e)}
 
 
+# ---------- tool 6 (admin) ----------
+
+def list_active_cuts() -> dict:
+    """Admin tool. All cuts happening now or coming up (status validated or
+    active), with zone, region, feeder and Tunisia local times."""
+    try:
+        now = datetime.now(timezone.utc)
+        rows = (supabase.table("program_schedule")
+                .select("status,time_slot_start,time_slot_end,feeder_id")
+                .in_("status", ["validated", "active"])
+                .execute().data)
+        rows = [r for r in rows
+                if _parse_ts(r["time_slot_end"]) and _parse_ts(r["time_slot_end"]) >= now]
+        if not rows:
+            return {"count": 0, "cuts": []}
+
+        feeder_ids = list({r["feeder_id"] for r in rows if r["feeder_id"]})
+        feeders = {f["id"]: f for f in supabase.table("feeders")
+                   .select("id,name,zone_id").in_("id", feeder_ids).execute().data}
+        zone_ids = list({f["zone_id"] for f in feeders.values() if f["zone_id"]})
+        zones = ({z["id"]: z for z in supabase.table("zones")
+                  .select("id,name,crc").in_("id", zone_ids).execute().data}
+                 if zone_ids else {})
+
+        cuts = []
+        for r in sorted(rows, key=lambda r: _parse_ts(r["time_slot_start"])):
+            f = feeders.get(r["feeder_id"], {})
+            z = zones.get(f.get("zone_id"), {})
+            cuts.append({
+                "zone": z.get("name"),
+                "region": z.get("crc"),
+                "feeder": f.get("name"),
+                "status": r["status"],
+                "start_local_time": _parse_ts(r["time_slot_start"]).astimezone(TUNIS).strftime("%Y-%m-%d %H:%M"),
+                "end_local_time": _parse_ts(r["time_slot_end"]).astimezone(TUNIS).strftime("%Y-%m-%d %H:%M"),
+            })
+        return {"count": len(cuts), "cuts": cuts[:15]}
+    except Exception as e:
+        return {"error": str(e)}
+
+
 # ---------- manual tests ----------
 
 if __name__ == "__main__":
@@ -189,3 +232,7 @@ if __name__ == "__main__":
     print()
     zid = input("Paste a zone_id to test get_zone_schedule: ")
     print(get_zone_schedule(zid))
+
+    print()
+    print("Active / upcoming cuts:")
+    print(list_active_cuts())
