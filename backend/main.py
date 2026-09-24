@@ -30,8 +30,11 @@ from models import (AuditLog, BCC, Citizen, ExecutionLog, Feeder, LoadResourceDa
 app = FastAPI(title="ENERGY Balance TN API", version="2.0.0",
               description="Backend of the national intelligent load-shedding platform (PESTGM 7.0, Track 2).")
 
+from compat_v1 import router as compat_router
+app.include_router(compat_router)
+
 app.add_middleware(CORSMiddleware,
-                   allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+                   allow_origins=["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:5174", "http://127.0.0.1:5174"],
                    allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 ZONE_STATUSES = {"Power Available", "High Demand", "Scheduled Outage", "Emergency Outage", "Unknown"}
