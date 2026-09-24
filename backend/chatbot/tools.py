@@ -32,7 +32,9 @@ def get_zone_schedule(db: Session, zone_id: int) -> dict:
     end = datetime.fromisoformat(f"{nxt['date']}T{nxt['end']}").replace(tzinfo=TUNIS_TZ)
     view = {"zone_name": zone.name, "status": "active" if nxt["active"] else "scheduled",
             "day": _day_label(start.date(), now.date()), "start_local_time": nxt["start"],
-            "estimated_restoration_local_time": nxt["end"], "other_cuts_planned": len(items) - 1}
+            "estimated_restoration_local_time": nxt["end"], "other_cuts_planned": len(items) - 1,
+            "all_cuts": [{"day": _day_label(date.fromisoformat(i["date"]), now.date()), "start": i["start"],
+                          "end": i["end"], "active": i["active"]} for i in items]}
     if nxt["active"]:
         view["minutes_until_restoration"] = max(0, int((end - now).total_seconds() // 60))
     else:

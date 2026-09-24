@@ -3321,3 +3321,55 @@ select:focus-visible {
     grid-template-columns: 1fr 1fr;
   }
 }
+
+/* =========================================================
+   STATUS COLORS (outage = red, high demand = amber)
+========================================================= */
+
+.status-card.status-outage {
+  border-color: #fecaca;
+  background: linear-gradient(110deg, #fef2f2, #fffafa);
+}
+
+.status-card.status-outage .large-status-icon {
+  background: #dc2626;
+  box-shadow: 0 0 0 7px #dc262622;
+}
+
+.status-card.status-outage h3 {
+  color: #b91c1c;
+}
+
+.status-card.status-outage p {
+  color: #9f6b6b;
+}
+
+.status-card.status-demand {
+  border-color: #fde68a;
+  background: linear-gradient(110deg, #fffbeb, #fffdf7);
+}
+
+.status-card.status-demand .large-status-icon {
+  background: #f59e0b;
+  box-shadow: 0 0 0 7px #f59e0b22;
+}
+
+.status-card.status-demand h3 {
+  color: #b45309;
+}
+
+.zone-status-row.status-outage .small-status-dot {
+  background: #dc2626;
+}
+
+.zone-status-row.status-outage strong {
+  color: #b91c1c;
+}
+
+.zone-status-row.status-demand .small-status-dot {
+  background: #f59e0b;
+}
+
+.zone-status-row.status-demand strong {
+  color: #b45309;
+}

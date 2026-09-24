@@ -1,6 +1,7 @@
 """Chat engine: connects the local model (Ollama, qwen3:8b) to the read-only tools.
 Security by design:
-- The citizen tool has NO parameters: the zone comes from the login token, never from the model.
+- Citizen facts are fetched by code from the login token's zone; the model only phrases them,
+  and every time it writes is checked against the database before the answer is sent.
 - If a citizen names another zone, the model receives NO schedule data at all (guard in code).
 - Language is detected in code; runaway/echo answers are replaced by a clean fallback.
 """
@@ -43,7 +44,7 @@ DERJA_WORDS = {"chbik", "3aweni", "aaweni", "wa9tech", "wa9teh", "waqtech", "wak
 FRENCH_WORDS = {"bonjour", "bonsoir", "salut", "merci", "quand", "pourquoi", "quel", "quelle", "quels",
                 "est", "sont", "le", "la", "les", "du", "des", "de", "une", "un", "mon", "ma", "mes", "je",
                 "vous", "courant", "coupure", "coupures", "electricite", "retour", "revient", "reviendra",
-                "aujourd", "demain", "zones", "il", "y", "a-t-il", "combien", "comment"}
+                "aujourd", "demain", "il", "y", "a-t-il", "combien", "comment"}
 
 DERJA_GLOSSARY = ("Tunisian Derja words you may see: ma9sous/maqsous = cut, dhaw/dhaou/courant = electricity, "
                   "a3tini = give me, wa9tech = when, yarja3 = comes back, fama = is there, lkol/kol = all, "
@@ -83,6 +84,80 @@ def _norm(text):
     """Lowercase and keep only letters/digits, so 'La Soukra' matches 'lasoukra' or 'la-soukra'."""
     return re.sub(r"[^a-z0-9]", "", (text or "").lower())
 
+
+
+# ================= answer verification (times are never trusted from the model) =================
+
+_ARABIC_DIGITS = str.maketrans("٠١٢٣٤٥٦٧٨٩", "0123456789")
+_TIME_RE = re.compile(r"(?<![\d:])([01]?\d|2[0-3])\s*(?::|[hH](?![a-zA-Z]))\s*([0-5]\d)?(?:\s*([AaPp])\.?\s*[Mm]\.?)?(?![\d:])")
+
+SCHEDULE_WORDS = ("when", "come back", "comes back", "restor", "cut", "outage", "power", "electric", "schedule",
+                  "quand", "revien", "retour", "coup", "courant", "electricit", "électricit", "horaire",
+                  "wa9t", "waqt", "wakt", "yarja", "ma9sous", "maqsous", "dhaw", "dhaou", "9adech",
+                  "متى", "وقتاش", "يرجع", "الضو", "الكهرباء", "كهرباء", "قطع", "مقطوع")
+
+DAY_WORDS = {"English": {"today": "today", "tomorrow": "tomorrow"},
+             "French": {"today": "aujourd'hui", "tomorrow": "demain"},
+             "Arabic": {"today": "اليوم", "tomorrow": "غدًا"}}
+OTHER_DAY = {"English": "on {d}", "French": "le {d}", "Arabic": "يوم {d}"}
+
+TEMPLATES = {
+    "English": {"active": "Electricity is currently cut in {zone}. It should come back {day} at {end}.",
+                "scheduled": "A planned power cut is expected in {zone} {day} from {start} to {end}.",
+                "none": "There is no planned or ongoing power cut in {zone} right now."},
+    "French": {"active": "Le courant est actuellement coupé à {zone}. Il devrait revenir {day} à {end}.",
+               "scheduled": "Une coupure est prévue à {zone} {day} de {start} à {end}.",
+               "none": "Aucune coupure n'est prévue ou en cours à {zone} pour le moment."},
+    "Arabic": {"active": "الكهرباء مقطوعة حاليًا في {zone}. من المتوقع أن تعود {day} على الساعة {end}.",
+               "scheduled": "من المبرمج قطع الكهرباء في {zone} {day} من الساعة {start} إلى الساعة {end}.",
+               "none": "لا يوجد أي قطع مبرمج أو جارٍ للكهرباء في {zone} حاليًا."},
+}
+
+UNVERIFIED = {
+    "English": "I could not verify that answer against the platform data. Please rephrase your question.",
+    "French": "Je n'ai pas pu vérifier cette réponse avec les données de la plateforme. Pouvez-vous reformuler ?",
+    "Arabic": "لم أتمكن من التحقق من هذه الإجابة من بيانات المنصة. هل يمكنك إعادة صياغة سؤالك؟",
+}
+
+
+def _times_in(text):
+    """All clock times written in a text, normalized to HH:MM (handles 11:34, 17h00, 17h, 10:45 PM, Arabic digits)."""
+    found = set()
+    for h, m, ampm in _TIME_RE.findall((text or "").translate(_ARABIC_DIGITS)):
+        hour = int(h)
+        if ampm and ampm.lower() == "p" and hour < 12:
+            hour += 12
+        if ampm and ampm.lower() == "a" and hour == 12:
+            hour = 0
+        found.add(f"{hour:02d}:{int(m or 0):02d}")
+    return found
+
+
+def _asks_schedule(message):
+    low = (message or "").lower()
+    return any(word in low for word in SCHEDULE_WORDS)
+
+
+def _day_text(day, lang):
+    return DAY_WORDS[lang].get(day) or OTHER_DAY[lang].format(d=day)
+
+
+def _citizen_template(facts, lang):
+    """The always-correct answer, built by code from the database facts."""
+    status = facts.get("status", "none")
+    zone = facts.get("zone_name", "")
+    if status not in ("active", "scheduled"):
+        return TEMPLATES[lang]["none"].format(zone=zone)
+    return TEMPLATES[lang][status].format(zone=zone, day=_day_text(facts["day"], lang),
+                                          start=facts["start_local_time"],
+                                          end=facts["estimated_restoration_local_time"])
+
+
+def _allowed_times(facts):
+    allowed = set()
+    for cut in facts.get("all_cuts", []):
+        allowed |= {cut["start"], cut["end"]}
+    return allowed
 
 
 def _other_zone_mentioned(db: Session, message: str, own_zone_id: int):
@@ -140,13 +215,7 @@ def _admin_executors(db: Session, bcc_ids):
         "compare_regions": lambda a: compare_regions(db, a.get("period_start", ""), a.get("period_end", "")),
     }
 
-# The citizen tool has NO parameters on purpose: the zone is fixed by the server.
-CITIZEN_TOOLS = [
-    {"type": "function", "function": {
-        "name": "get_my_schedule",
-        "description": "Get the current or next power cut in the user's own zone, with estimated restoration time. It already knows the user's zone.",
-        "parameters": {"type": "object", "properties": {}}}},
-]
+# Citizens get no tools: their zone's facts are fetched by code and verified after the answer.
 
 def _lang_rule(reply_lang):
     return f"IMPORTANT: write your whole answer in {reply_lang} only."
@@ -177,22 +246,28 @@ Rules:
 - Be concise. {_lang_rule(reply_lang)}"""
 
 
-def _citizen_prompt(zone_name, reply_lang):
+def _citizen_prompt(zone_name, reply_lang, facts, verified_answer):
     return f"""{_lang_rule(reply_lang)}
 
 You are the STEG power-cut assistant for citizens. Today is {date.today().isoformat()}. All times are Tunisia local time.
-The user lives in the zone "{zone_name}". The tool get_my_schedule ONLY describes "{zone_name}".
+The user lives in the zone "{zone_name}". You only have information about "{zone_name}".
+
+VERIFIED DATA for {zone_name} (from the STEG database, the only source you may use):
+{json.dumps(facts, ensure_ascii=False)}
+VERIFIED ANSWER (use exactly these times and this day): {verified_answer}
+
 Rules:
-- For any question about power cuts, when electricity comes back, or the schedule, ALWAYS call get_my_schedule first.
-- Answer only from the tool result. Never invent or estimate a time. If status is "none", say there is no planned or ongoing cut in {zone_name} right now.
+- You are the assistant. Answer the user; never write as if you were the user.
+- For any question about power cuts, when electricity comes back, or the schedule, give the VERIFIED ANSWER
+  (you may rephrase it, but never change a time or a day, and never add another time).
+- Never invent or estimate a time.
 - Never say anything about the power situation of any other place than {zone_name}.
-- Never mention internal details (feeders, priorities, BCC decisions) and never mention tool names.
+- Never mention internal details (feeders, priorities, BCC decisions, databases, tools).
 - If asked WHY there is a cut: say STEG plans cuts to balance electricity supply and demand, and rotates them
   fairly between zones. Do not invent any other reason.
 - If asked about all zones or other zones: say you can only give information about {zone_name}.
 - If the message is only a greeting or a request for help, greet back briefly and say you can tell them
   when the electricity will be cut or come back in {zone_name}.
-- Always give the exact restoration time and day (today/tomorrow) from the tool when there is a cut.
 - {DERJA_GLOSSARY}
 - Keep it short and friendly. {_lang_rule(reply_lang)}"""
 
@@ -221,7 +296,7 @@ def _finish(content, done_reason, user_message, reply_lang):
     return FALLBACK[reply_lang] if _is_garbage(reply, done_reason, user_message) else reply
 
 
-def _run(messages, tools, executors, user_message, reply_lang):
+def _run(messages, tools, executors, user_message, reply_lang, collected=None):
     try:
         for _ in range(MAX_TOOL_ROUNDS):
             msg, done_reason = _call(messages, tools)
@@ -233,8 +308,10 @@ def _run(messages, tools, executors, user_message, reply_lang):
                 args = call.function.arguments or {}
                 fn = executors.get(name)
                 result = fn(args) if fn else {"error": f"Unknown tool {name}"}
-                messages.append({"role": "tool", "tool_name": name,
-                                 "content": json.dumps(result, default=str, ensure_ascii=False)})
+                content = json.dumps(result, default=str, ensure_ascii=False)
+                if collected is not None:
+                    collected.append(content)
+                messages.append({"role": "tool", "tool_name": name, "content": content})
         # too many tool rounds: force a final answer without tools
         msg, done_reason = _call(messages)
         return _finish(msg.content, done_reason, user_message, reply_lang)
@@ -247,7 +324,12 @@ def chat_admin(db: Session, message: str, history=None, bcc_ids=None) -> str:
     reply_lang = REPLY_LANGUAGE[_detect_language(message)]
     messages = [{"role": "system", "content": _admin_prompt(reply_lang)}] + (history or [])
     messages.append({"role": "user", "content": message})
-    return _run(messages, ADMIN_TOOLS, _admin_executors(db, bcc_ids), message, reply_lang)
+    tool_results = []
+    reply = _run(messages, ADMIN_TOOLS, _admin_executors(db, bcc_ids), message, reply_lang, tool_results)
+    allowed = _times_in(" ".join(tool_results)) | _times_in(message)
+    if _times_in(reply) - allowed:  # the model wrote a time that no tool returned
+        return UNVERIFIED[reply_lang]
+    return reply
 
 
 def chat_citizen(db: Session, message: str, zone_id: int) -> str:
@@ -266,7 +348,21 @@ def chat_citizen(db: Session, message: str, zone_id: int) -> str:
                     {"role": "user", "content": message}]
         return _run(messages, None, {}, message, reply_lang)
 
-    executors = {"get_my_schedule": lambda a: get_zone_schedule(db, zone.id)}
-    messages = [{"role": "system", "content": _citizen_prompt(zone.name, reply_lang)},
+    # 1. Facts come from the database, fetched by code (the model cannot skip or alter this step).
+    facts = get_zone_schedule(db, zone.id)
+    verified = _citizen_template(facts, reply_lang)
+    messages = [{"role": "system", "content": _citizen_prompt(zone.name, reply_lang, facts, verified)},
                 {"role": "user", "content": message}]
-    return _run(messages, CITIZEN_TOOLS, executors, message, reply_lang)
+    # 2. The model only phrases the answer.
+    reply = _run(messages, None, {}, message, reply_lang)
+
+    # 3. Code verifies every time in the answer. Any doubt -> the verified sentence.
+    asks = _asks_schedule(message)
+    written, allowed = _times_in(reply), _allowed_times(facts)
+    if reply in FALLBACK.values() or reply == TIMEOUT_REPLY:
+        return verified if asks else reply  # even if the AI is down, schedule questions get the right answer
+    if written - allowed:
+        return verified  # invented time
+    if asks and facts.get("status") in ("active", "scheduled") and not (written & allowed):
+        return verified  # schedule question answered without the real time
+    return reply

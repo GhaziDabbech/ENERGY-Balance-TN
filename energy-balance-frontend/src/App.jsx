@@ -437,7 +437,7 @@ function Dashboard({
         </div>
       </section>
 
-      <section className="status-card">
+      <section className={`status-card status-${dashboardData?.current_situation?.status || "available"}`}>
         <div className="status-card-left">
           <div className="large-status-icon">
             {dashboardData?.current_situation?.under_shedding ? "!" : "✓"}
@@ -535,7 +535,7 @@ function Dashboard({
             </span>
           </div>
 
-          <div className="zone-status-row">
+          <div className={`zone-status-row status-${dashboardData?.current_situation?.status || "available"}`}>
             <span className="small-status-dot"></span>
 
             <div>
@@ -1020,10 +1020,9 @@ function EnergyMap({ dashboardData }) {
         <strong>About this map</strong>
 
         <span>
-          Map locations and electricity statuses
-          are currently demonstration data across Tunisia. The
-          geographic map is provided by
-          OpenStreetMap.
+          Your zone's status comes live from the STEG platform and refreshes every minute.
+          For privacy and fairness, citizens only see their own zone.
+          Map data: OpenStreetMap.
         </span>
       </div>
     </div>
