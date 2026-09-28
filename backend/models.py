@@ -142,3 +142,36 @@ class AuditLog(Base):
     action = Column(String(100), nullable=False)
     details = Column(Text)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+class Order(Base):
+    __tablename__ = "orders"
+    id = Column(Integer, primary_key=True)
+    order_ref = Column(String(50), nullable=False, unique=True)
+    order_type = Column(String(20), nullable=False)
+    sub_type = Column(String(50))
+    mw_total = Column(Numeric(10, 2), nullable=False, default=0)
+    mw_nord = Column(Numeric(10, 2), nullable=False, default=0)
+    mw_sud = Column(Numeric(10, 2), nullable=False, default=0)
+    issued_by = Column(Integer, ForeignKey("staff_users.id"), nullable=False)
+    target_crc_id = Column(Integer)
+    status = Column(String(20), nullable=False, default="pending")
+    notes = Column(Text)
+    issued_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    cancelled_at = Column(DateTime)
+    cancelled_by = Column(Integer)
+    acks = relationship("OrderAck", back_populates="order")
+
+class OrderAck(Base):
+    __tablename__ = "order_acks"
+    id = Column(Integer, primary_key=True)
+    order_id = Column(Integer, ForeignKey("orders.id"), nullable=False)
+    user_id = Column(Integer, ForeignKey("staff_users.id"), nullable=False)
+    bcc_id = Column(Integer, ForeignKey("bcc.id"))
+    mw_assigned = Column(Numeric(10, 2), nullable=False, default=0)
+    mw_executed = Column(Numeric(10, 2), nullable=False, default=0)
+    status = Column(String(20), nullable=False, default="acknowledged")
+    acked_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    executed_at = Column(DateTime)
+    schedule_ids = Column(Text)
+    order = relationship("Order", back_populates="acks")

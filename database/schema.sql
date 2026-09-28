@@ -396,3 +396,38 @@ CREATE INDEX idx_staff_email
 
 CREATE INDEX idx_audit_created
     ON audit_log(created_at);
+
+
+-- ============================================================
+-- 13. ORDERS (DN issues shedding orders)
+-- ============================================================
+
+CREATE TABLE orders (
+    id SERIAL PRIMARY KEY,
+    order_ref VARCHAR(50) NOT NULL UNIQUE,
+    order_type VARCHAR(20) NOT NULL,
+    sub_type VARCHAR(50),
+    mw_total NUMERIC(10,2) NOT NULL DEFAULT 0,
+    mw_nord NUMERIC(10,2) NOT NULL DEFAULT 0,
+    mw_sud NUMERIC(10,2) NOT NULL DEFAULT 0,
+    issued_by INTEGER NOT NULL REFERENCES staff_users(id),
+    target_crc_id INTEGER,
+    status VARCHAR(20) NOT NULL DEFAULT 'pending',
+    notes TEXT,
+    issued_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    cancelled_at TIMESTAMP,
+    cancelled_by INTEGER
+);
+
+CREATE TABLE order_acks (
+    id SERIAL PRIMARY KEY,
+    order_id INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES staff_users(id),
+    bcc_id INTEGER REFERENCES bcc(id),
+    mw_assigned NUMERIC(10,2) NOT NULL DEFAULT 0,
+    mw_executed NUMERIC(10,2) NOT NULL DEFAULT 0,
+    status VARCHAR(20) NOT NULL DEFAULT 'acknowledged',
+    acked_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    executed_at TIMESTAMP,
+    schedule_ids TEXT
+);
