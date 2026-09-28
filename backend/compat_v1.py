@@ -275,3 +275,55 @@ def list_compat_execs(status: Optional[str] = None, limit: int = 100, db: Sessio
         q = q.filter(ExecutionLog.actual_end > now)
     execs = q.order_by(ExecutionLog.actual_start.desc()).limit(limit).all()
     return [{"id": e.id, "feeder_id": e.schedule.feeder_id, "bcc_id": e.schedule.feeder.bcc_id, "operator_id": staff.id, "started_at": e.actual_start.isoformat() + "Z", "ended_at": None if e.actual_end > now else e.actual_end.isoformat() + "Z", "mw_shed": float(e.actual_mw_shed), "status": "executing" if e.actual_end > now else "restored"} for e in execs]
+
+
+@router.get("/dashboard")
+def get_dashboard(db: Session = Depends(get_db), staff: StaffUser = Depends(get_current_staff)):
+    now = tunis_now()
+    return {
+        "timestamp": now.isoformat() + "Z",
+        "national": {
+            "consigne": 0.0,
+            "realise": 0.0,
+            "ecart": 0.0,
+            "pct": 0.0,
+            "ens_today": 0.0,
+            "active_cuts": 0,
+            "zones_actives": []
+        },
+        "anomaly_bccs": [],
+        "bcc_rows": [],
+        "crc_summary": {},
+        "live_cuts": []
+    }
+
+@router.get("/kpis/timeseries")
+def get_timeseries(interval_min: int = 30, db: Session = Depends(get_db), staff: StaffUser = Depends(get_current_staff)):
+    now = tunis_now()
+    return {
+        "date": now.date().isoformat(),
+        "interval_min": interval_min,
+        "crc_id": None,
+        "slots": [],
+        "total_ens_mwh": 0.0
+    }
+
+@router.get("/historique")
+def get_historique(date_from: Optional[str] = None, date_to: Optional[str] = None, db: Session = Depends(get_db), staff: StaffUser = Depends(get_current_staff)):
+    return {
+        "period": {"from": date_from, "to": date_to},
+        "national_totals": {"total_cuts": 0, "total_ens_mwh": 0.0, "total_duration_h": 0.0, "equity_score": 100},
+        "bccs": []
+    }
+
+@router.get("/kpis/national")
+def get_kpis_national():
+    return {"total_ens_mwh": 0.0, "active_cuts_count": 0, "active_shedding_mw": 0.0, "active_orders_count": 0, "bccs_total": 0}
+
+@router.get("/kpis/crc/{crc_id}")
+def get_kpis_crc(crc_id: int):
+    return {"crc_id": crc_id, "crc_name": f"CRC {crc_id}", "active_shedding_mw": 0.0, "ens_mwh": 0.0, "active_cuts_count": 0, "bcc_count": 0}
+
+@router.get("/kpis/bcc/{bcc_id}")
+def get_kpis_bcc(bcc_id: int):
+    return {"bcc_id": bcc_id, "active_shedding_mw": 0.0, "ens_total_mwh": 0.0, "total_cuts": 0, "feeder_stats": []}
