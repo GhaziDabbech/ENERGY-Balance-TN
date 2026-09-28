@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 from typing import Optional
 
 from database import get_db
-from models import StaffUser
+from models import StaffUser, Region, BCC, Feeder
 from auth import get_current_staff, verify_password, create_token
 
 router = APIRouter(prefix="/api/v1", tags=["compat_v1"])
@@ -65,3 +65,34 @@ def refresh(body: RefreshRequest):
 @router.get("/auth/me")
 def me(staff: StaffUser = Depends(get_current_staff)):
     return map_staff_to_ahmed(staff)
+
+@router.get("/admin/crcs")
+def list_crcs(db: Session = Depends(get_db)):
+    regions = db.query(Region).order_by(Region.id).all()
+    return [{"id": r.id, "name": f"CRC {r.name.capitalize()}", "city": r.name.capitalize()} for r in regions]
+
+@router.get("/admin/bccs")
+def list_bccs(db: Session = Depends(get_db)):
+    bccs = db.query(BCC).order_by(BCC.id).all()
+    return [{"id": b.id, "name": b.name, "zone": b.crc.capitalize(), "crc_name": f"CRC {b.crc.capitalize()}"} for b in bccs]
+
+@router.get("/feeders")
+def list_feeders(bcc_id: Optional[int] = None, db: Session = Depends(get_db), staff: StaffUser = Depends(get_current_staff)):
+    q = db.query(Feeder)
+    if bcc_id:
+        q = q.filter(Feeder.bcc_id == bcc_id)
+    elif staff.role == "bcc":
+        q = q.filter(Feeder.bcc_id == staff.bcc_id)
+        
+    feeders = q.order_by(Feeder.priority_level, Feeder.id).all()
+    return [{
+        "id": f.id,
+        "bcc_id": f.bcc_id,
+        "ref": f"F-{f.id:03d}",
+        "nom": f.name,
+        "poste_source": f.bcc.name if f.bcc else "-",
+        "zone": f.zone.name if f.zone else "-",
+        "mw_nominal": float(f.avg_load_mw),
+        "priority": f"P{f.priority_level}",
+        "statut": "Actif" if f.active else "Inactif"
+    } for f in feeders]
