@@ -4,7 +4,9 @@ from sqlalchemy.orm import Session
 from typing import Optional
 
 from database import get_db
-from models import StaffUser, Region, BCC, Feeder
+from models import StaffUser, Region, BCC, Feeder, Order, OrderAck
+from logic import split_regional_target, audit
+from datetime import datetime
 from auth import get_current_staff, verify_password, create_token
 
 router = APIRouter(prefix="/api/v1", tags=["compat_v1"])
@@ -96,3 +98,81 @@ def list_feeders(bcc_id: Optional[int] = None, db: Session = Depends(get_db), st
         "priority": f"P{f.priority_level}",
         "statut": "Actif" if f.active else "Inactif"
     } for f in feeders]
+    
+    
+class OrderCreate(BaseModel):
+    order_type: str
+    sub_type: Optional[str] = None
+    mw_total: float
+    mw_nord: float = 0.0
+    mw_sud: float = 0.0
+    target_crc_id: Optional[int] = None
+    notes: Optional[str] = None
+
+def _format_order(order: Order):
+    return {
+        "id": order.id,
+        "order_ref": order.order_ref,
+        "order_type": order.order_type,
+        "sub_type": order.sub_type,
+        "mw_total": float(order.mw_total),
+        "mw_nord": float(order.mw_nord),
+        "mw_sud": float(order.mw_sud),
+        "issued_by": order.issued_by,
+        "issued_at": order.issued_at.isoformat() + "Z",
+        "target_crc_id": order.target_crc_id,
+        "status": order.status,
+        "cancelled_by": order.cancelled_by,
+        "cancelled_at": order.cancelled_at.isoformat() + "Z" if order.cancelled_at else None,
+        "notes": order.notes,
+        "acks": [{
+            "id": a.id,
+            "order_id": a.order_id,
+            "user_id": a.user_id,
+            "bcc_id": a.bcc_id,
+            "mw_assigned": float(a.mw_assigned),
+            "mw_executed": float(a.mw_executed),
+            "status": a.status,
+            "acked_at": a.acked_at.isoformat() + "Z" if a.acked_at else None,
+            "executed_at": a.executed_at.isoformat() + "Z" if a.executed_at else None,
+        } for a in order.acks]
+    }
+
+@router.get("/orders")
+def list_orders(limit: int = 50, db: Session = Depends(get_db), staff: StaffUser = Depends(get_current_staff)):
+    orders = db.query(Order).order_by(Order.issued_at.desc()).limit(limit).all()
+    return [_format_order(o) for o in orders]
+
+@router.post("/orders")
+def create_order(body: OrderCreate, db: Session = Depends(get_db), staff: StaffUser = Depends(get_current_staff)):
+    mw_nord = body.mw_nord
+    mw_sud = body.mw_sud
+    
+    # Run our engine's regional split if the frontend sent 0
+    if mw_nord == 0 and mw_sud == 0:
+        split = split_regional_target(db, body.mw_total)
+        mw_nord = split.get("nord", 0)
+        mw_sud = split.get("sud", 0)
+
+    now = datetime.utcnow()
+    count = db.query(Order).filter(Order.order_type == body.order_type).count() + 1
+    prefix = "URG" if body.order_type == "urgence" else "REA"
+    order_ref = f"{prefix}-{now.year}-{now.month:02d}{now.day:02d}-{count:03d}"
+
+    order = Order(
+        order_ref=order_ref,
+        order_type=body.order_type,
+        sub_type=body.sub_type,
+        mw_total=body.mw_total,
+        mw_nord=mw_nord,
+        mw_sud=mw_sud,
+        issued_by=staff.id,
+        target_crc_id=body.target_crc_id,
+        status="pending",
+        notes=body.notes
+    )
+    db.add(order)
+    audit(db, staff, "order_created", f"ref={order_ref} mw={body.mw_total}")
+    db.commit()
+    db.refresh(order)
+    return _format_order(order)
