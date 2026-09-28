@@ -4,9 +4,10 @@ from sqlalchemy.orm import Session
 from typing import Optional
 
 from database import get_db
-from models import StaffUser, Region, BCC, Feeder, Order, OrderAck
-from logic import split_regional_target, audit
-from datetime import datetime
+import json
+from datetime import datetime, timedelta
+from models import StaffUser, Region, BCC, Feeder, Order, OrderAck, ProgramSchedule, ExecutionLog
+from logic import split_regional_target, audit, tunis_now
 from auth import get_current_staff, verify_password, create_token
 
 router = APIRouter(prefix="/api/v1", tags=["compat_v1"])
@@ -176,3 +177,101 @@ def create_order(body: OrderCreate, db: Session = Depends(get_db), staff: StaffU
     db.commit()
     db.refresh(order)
     return _format_order(order)
+
+
+class OrderAckUpdate(BaseModel):
+    bcc_id: Optional[int] = None
+    mw_assigned: float = 0.0
+
+@router.patch("/orders/{order_id}/ack")
+def ack_order(order_id: int, body: OrderAckUpdate, db: Session = Depends(get_db), staff: StaffUser = Depends(get_current_staff)):
+    from main import ProposalIn, create_proposal
+    order = db.query(Order).filter(Order.id == order_id).first()
+    if not order:
+        raise HTTPException(404, "Order not found")
+        
+    ack = db.query(OrderAck).filter(OrderAck.order_id == order_id, OrderAck.user_id == staff.id).first()
+    if not ack:
+        ack = OrderAck(order_id=order_id, user_id=staff.id, bcc_id=body.bcc_id or staff.bcc_id, mw_assigned=body.mw_assigned)
+        db.add(ack)
+        
+    ack.acked_at = datetime.utcnow()
+    ack.status = "acknowledged"
+    order.status = "acknowledged"
+    db.commit()
+
+    # Link to our backend's AI load-shedding engine
+    if body.mw_assigned > 0 and ack.bcc_id:
+        now = tunis_now()
+        minute = (now.minute // 5 + 1) * 5
+        start_time = (now + timedelta(minutes=minute - now.minute)).time()
+        try:
+            prop = ProposalIn(bcc_id=ack.bcc_id, target_mw=body.mw_assigned, scheduled_date=now.date(), start_time=start_time, duration_minutes=45)
+            res = create_proposal(prop, staff, db)
+            created_ids = []
+            for item in res["created"]:
+                sid = item["schedule_id"]
+                created_ids.append(sid)
+                s = db.query(ProgramSchedule).get(sid)
+                s.status = "approved" # Auto-approve for the compatibility layer
+            ack.schedule_ids = json.dumps(created_ids)
+            db.commit()
+        except Exception as e:
+            print("Engine skipped:", e)
+            
+    return _format_order(order)
+
+class OrderExecuteUpdate(BaseModel):
+    mw_executed: float
+
+@router.patch("/orders/{order_id}/execute")
+def execute_order(order_id: int, body: OrderExecuteUpdate, db: Session = Depends(get_db), staff: StaffUser = Depends(get_current_staff)):
+    order = db.query(Order).filter(Order.id == order_id).first()
+    ack = db.query(OrderAck).filter(OrderAck.order_id == order_id, OrderAck.user_id == staff.id).first()
+    if ack:
+        ack.executed_at = datetime.utcnow()
+        ack.mw_executed = body.mw_executed
+        ack.status = "completed"
+    order.status = "executing"
+    db.commit()
+    return _format_order(order)
+
+class ExecutionCreate(BaseModel):
+    feeder_id: int
+    mw_shed: float
+    trigger: str = "manual"
+    order_id: Optional[int] = None
+    notes: Optional[str] = None
+
+@router.post("/executions")
+def create_compat_exec(body: ExecutionCreate, db: Session = Depends(get_db), staff: StaffUser = Depends(get_current_staff)):
+    from main import ExecutionIn, create_execution
+    now = tunis_now()
+    s = db.query(ProgramSchedule).filter(ProgramSchedule.feeder_id == body.feeder_id, ProgramSchedule.status == "approved").first()
+    if not s:
+        s = ProgramSchedule(feeder_id=body.feeder_id, zone_id=db.query(Feeder).get(body.feeder_id).zone_id, scheduled_date=now.date(), start_time=now.time(), end_time=(now + timedelta(minutes=45)).time(), target_mw=body.mw_shed, status="approved", reason="Manual")
+        db.add(s)
+        db.flush()
+        
+    ex_in = ExecutionIn(schedule_id=s.id, actual_start=now.replace(tzinfo=None), actual_end=(now + timedelta(minutes=45)).replace(tzinfo=None), actual_mw_shed=body.mw_shed, notes=body.notes)
+    res = create_execution(ex_in, staff, db)
+    return {"id": res["id"], "feeder_id": body.feeder_id, "bcc_id": staff.bcc_id, "operator_id": staff.id, "order_id": body.order_id, "started_at": res["actual_start"] + "Z", "ended_at": None, "mw_shed": body.mw_shed, "ens_mwh": 0.0, "trigger": body.trigger, "status": "executing", "notes": body.notes}
+
+class ExecutionRestore(BaseModel):
+    notes: Optional[str] = None
+
+@router.patch("/executions/{exec_id}/restore")
+def restore_compat_exec(exec_id: int, body: ExecutionRestore, db: Session = Depends(get_db), staff: StaffUser = Depends(get_current_staff)):
+    e = db.query(ExecutionLog).get(exec_id)
+    e.actual_end = datetime.utcnow()
+    db.commit()
+    return {"id": e.id, "feeder_id": e.schedule.feeder_id, "bcc_id": staff.bcc_id, "operator_id": staff.id, "started_at": e.actual_start.isoformat() + "Z", "ended_at": e.actual_end.isoformat() + "Z", "mw_shed": float(e.actual_mw_shed), "ens_mwh": float(e.actual_mw_shed) * ((e.actual_end - e.actual_start).total_seconds() / 3600), "status": "restored"}
+
+@router.get("/executions")
+def list_compat_execs(status: Optional[str] = None, limit: int = 100, db: Session = Depends(get_db), staff: StaffUser = Depends(get_current_staff)):
+    now = datetime.utcnow()
+    q = db.query(ExecutionLog)
+    if status == "executing":
+        q = q.filter(ExecutionLog.actual_end > now)
+    execs = q.order_by(ExecutionLog.actual_start.desc()).limit(limit).all()
+    return [{"id": e.id, "feeder_id": e.schedule.feeder_id, "bcc_id": e.schedule.feeder.bcc_id, "operator_id": staff.id, "started_at": e.actual_start.isoformat() + "Z", "ended_at": None if e.actual_end > now else e.actual_end.isoformat() + "Z", "mw_shed": float(e.actual_mw_shed), "status": "executing" if e.actual_end > now else "restored"} for e in execs]
