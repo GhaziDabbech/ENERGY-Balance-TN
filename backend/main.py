@@ -11,7 +11,7 @@ Access rules:
 from datetime import date, datetime, time, timedelta
 from typing import List, Optional
 
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import text
@@ -515,3 +515,12 @@ def cancel_schedule(schedule_id: int, payload: CancelIn, staff: StaffUser = Depe
     audit(db, staff, "approved_cut_cancelled", f"schedule={s.id} feeder={s.feeder.name} reason={payload.reason or '-'}")
     db.commit()
     return {"cancelled": s.id}
+
+@app.websocket("/ws")
+async def dummy_ws(websocket: WebSocket):
+    await websocket.accept()
+    try:
+        while True:
+            await websocket.receive_text()
+    except:
+        pass
