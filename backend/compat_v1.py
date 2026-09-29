@@ -327,3 +327,18 @@ def get_kpis_crc(crc_id: int):
 @router.get("/kpis/bcc/{bcc_id}")
 def get_kpis_bcc(bcc_id: int):
     return {"bcc_id": bcc_id, "active_shedding_mw": 0.0, "ens_total_mwh": 0.0, "total_cuts": 0, "feeder_stats": []}
+
+
+
+class ChatIn(BaseModel):
+    message: str
+    history: Optional[list] = None
+
+@router.post("/chat/admin")
+def compat_chat_admin(payload: ChatIn, db: Session = Depends(get_db), staff: StaffUser = Depends(get_current_staff)):
+    from chatbot.chat import chat_admin
+    from logic import allowed_bcc_ids
+    history = [m for m in (payload.history or [])[-6:] if m.get("role") in ("user", "assistant")]
+    reply = chat_admin(db, payload.message, history, allowed_bcc_ids(db, staff), staff)
+    return {"reply": reply}
+

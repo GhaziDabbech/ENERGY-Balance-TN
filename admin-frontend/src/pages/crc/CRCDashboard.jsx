@@ -897,30 +897,57 @@ function ProgrammeJ1Modal({ isOpen, onClose })
 // ── AI slide panel ────────────────────────────────────────────────────────────
 function AiPanel({ isOpen, onClose })
 {
+    const token = useAuthStore(state => state.token)
     const [input, setInput] = useState('')
     const [msgs,  setMsgs]  = useState
     (
         [
             {
                 role: 'system'
-                ,text: `Analyse CRC Nord — Déficit -18,0 MW (14h32)\n\nBCC 3 sous-réalisé suite avarie D22 Béja.\nCompensations disponibles BCC 2 (+4 MW) et BCC 4 (+8 MW).\nGain estimé : +12 MW en 8 minutes.`
+                ,text: "Bonjour ! Je suis l'assistant IA ENERGY Balance TN. Comment puis-je vous aider ?"
             }
         ]
     )
 
-    const send = () =>
+    const send = async () =>
     {
         if (!input.trim()) return
-        setMsgs
-        (
-            (m) =>
-            [
-                ...m
-                ,{ role: 'user',   text: input }
-                ,{ role: 'system', text: 'Analyse en cours sur réseau Nord… Transit HTB admissible sur Radès–Mornaguia. Aucun goulot détecté.' }
-            ]
-        )
+
+        const userText = input
         setInput('')
+        
+        setMsgs((m) => [
+            ...m,
+            { role: 'user', text: userText },
+            { role: 'system', text: 'Analyse en cours...' }
+        ])
+
+        try {
+            const history = msgs.map(m => ({
+                role: m.role === 'system' ? 'assistant' : 'user',
+                content: m.text,
+                text: m.text
+            }))
+
+            // Use the pre-imported 'api' instance which handles the base URL and token
+            const response = await api.post(
+                '/api/v1/chat/admin',
+                { message: userText, history: history }
+            )
+
+            setMsgs((m) => {
+                const newM = [...m]
+                newM[newM.length - 1] = { role: 'system', text: response.data.reply }
+                return newM
+            })
+        } catch (error) {
+            console.error(error)
+            setMsgs((m) => {
+                const newM = [...m]
+                newM[newM.length - 1] = { role: 'system', text: "⚠️ Erreur de connexion à l'IA." }
+                return newM
+            })
+        }
     }
 
     return (

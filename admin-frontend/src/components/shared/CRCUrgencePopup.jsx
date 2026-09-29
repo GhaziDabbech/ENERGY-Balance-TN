@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
+import axios from 'axios'
 import { useUrgenceStore } from '../../stores/urgenceStore'
 import { useAuthStore }    from '../../stores/authStore'
 
@@ -62,6 +63,7 @@ const buildSuggested = (mw) =>
 // ── Shared BCC dispatch form ──────────────────────────────────────────────────
 function DispatchForm({ order, onDispatch, compact = false })
 {
+    const token    = useAuthStore(state => state.token)
     const mwNord   = order.mwNord
     const suggested = buildSuggested(mwNord)
 
@@ -85,15 +87,45 @@ function DispatchForm({ order, onDispatch, compact = false })
         setTimeout(() => onDispatch(order.id), 1500)
     }
 
-    const sendAiMsg = () =>
+    const sendAiMsg = async () =>
     {
         if (!aiInput.trim()) return
-        setAiMsgs((m) => [
-            ...m
-            ,{ role: 'user',   text: aiInput }
-            ,{ role: 'system', text: 'Analyse en cours sur le réseau Nord… Aucun goulot HTB détecté. Transit admissible sur Radès–Mornaguia.' }
-        ])
+
+        const userText = aiInput
         setAiInput('')
+        
+        setAiMsgs((m) => [
+            ...m,
+            { role: 'user', text: userText },
+            { role: 'system', text: 'Analyse en cours...' }
+        ])
+
+        try {
+            const history = aiMsgs.map(m => ({
+                role: m.role === 'system' ? 'assistant' : 'user',
+                content: m.text,
+                text: m.text
+            }))
+
+            const response = await axios.post(
+                'http://localhost:8000/api/v1/chat/admin',
+                { message: userText, history: history },
+                { headers: { Authorization: `Bearer ${token}` } }
+            )
+
+            setAiMsgs((m) => {
+                const newM = [...m]
+                newM[newM.length - 1] = { role: 'system', text: response.data.reply }
+                return newM
+            })
+        } catch (error) {
+            console.error(error)
+            setAiMsgs((m) => {
+                const newM = [...m]
+                newM[newM.length - 1] = { role: 'system', text: "⚠️ Erreur de connexion à l'IA." }
+                return newM
+            })
+        }
     }
 
     return (

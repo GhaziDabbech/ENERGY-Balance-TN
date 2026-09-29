@@ -1,36 +1,55 @@
 import { useState } from 'react'
-
-const MOCK_RESPONSE =
-`Analyse du deficit national (-38,5 MW) :
-
--> BCC 3 Nord-Ouest : -12 MW depuis 35 min suite a l'avarie disjoncteur D22 a Beja. Aucun depart P3/P4 disponible non encore delestes dans ce secteur.
-
--> BCC 5 Centre : -16,5 MW. Rotation anti-repetition bloque les departs F07 et F12 (coupure il y a < 24h). Departs P4/P5 mobilisables : F19 Oueslatia (7,5 MW) et F23 Haffouz (5 MW).
-
-Recommandation : Envoyer ordre correctif a BCC 4 (+8 MW compensation) et BCC 6 (+2 MW). Retablissement estime sous 6 minutes.`
+import axios from 'axios'
+import { useAuthStore } from '../stores/authStore'
 
 export default function AiDrawer({ isOpen, onClose, context })
 {
+    const token = useAuthStore(state => state.token)
     const [messages, setMessages] = useState
     (
-        [{ role: 'system', text: MOCK_RESPONSE }]
+        [{ role: 'system', text: "Bonjour ! Je suis l'assistant IA ENERGY Balance TN. Comment puis-je vous aider ?" }]
     )
     const [input, setInput] = useState('')
 
-    const send = () =>
+    const send = async () =>
     {
         if (!input.trim()) return
 
-        setMessages
-        (
-            (m) =>
-            [
-                ...m
-                ,{ role: 'user',   text: input }
-                ,{ role: 'system', text: 'Analyse en cours... (reponse simulee pour la demo)' }
-            ]
-        )
+        const userText = input
         setInput('')
+        
+        setMessages((m) => [
+            ...m,
+            { role: 'user', text: userText },
+            { role: 'system', text: 'Analyse en cours...' }
+        ])
+
+        try {
+            const history = messages.map(m => ({
+                role: m.role === 'system' ? 'assistant' : 'user',
+                content: m.text,
+                text: m.text
+            }))
+
+            const response = await axios.post(
+                'http://localhost:8000/api/v1/chat/admin',
+                { message: userText, history: history },
+                { headers: { Authorization: `Bearer ${token}` } }
+            )
+
+            setMessages((m) => {
+                const newM = [...m]
+                newM[newM.length - 1] = { role: 'system', text: response.data.reply }
+                return newM
+            })
+        } catch (error) {
+            console.error(error)
+            setMessages((m) => {
+                const newM = [...m]
+                newM[newM.length - 1] = { role: 'system', text: "⚠️ Erreur de connexion à l'IA." }
+                return newM
+            })
+        }
     }
 
     if (!isOpen) return null
