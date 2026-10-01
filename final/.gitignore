@@ -1,0 +1,55 @@
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+env/
+
+# ── Node ──────────────────────────────────────────────────────────────────────
+node_modules/
+dist/
+.pnp
+.pnp.js
+
+# ── Env / secrets ─────────────────────────────────────────────────────────────
+.env
+.env.*
+!.env.docker          # keep the template (no real secrets)
+.env.docker.local     # gitignore overrides with real values
+
+# ── IDEs ──────────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+
+# ── OS ────────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ── Docker build artifacts ────────────────────────────────────────────────────
+*.dockerignore
+
+# ── Kiro IDE ──────────────────────────────────────────────────────────────────
+.kiro/
+
+# ── Compiled Python bytecode ──────────────────────────────────────────────────
+**/__pycache__/
+*.pyc
+*.pyo
+
+# ── Node lock files ───────────────────────────────────────────────────────────
+package-lock.json
+
+# ── Reports / archives ────────────────────────────────────────────────────────
+*.zip
+ENERGY_Balance_TN_Report/
+
+# ── Misc backend scripts ──────────────────────────────────────────────────────
+backend/check_ts_api.py
+backend/diag.py

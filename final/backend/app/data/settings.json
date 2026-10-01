@@ -1,0 +1,13 @@
+{
+  "split_nord": 66,
+  "intervalle_min_heures": 4,
+  "bcc_consignes": {
+    "BCC 1": 110.0,
+    "BCC 2": 90.0,
+    "BCC 3": 50.0,
+    "BCC 4": 50.0,
+    "BCC 5": 50.0,
+    "BCC 6": 60.0,
+    "BCC 7": 40.0
+  }
+}

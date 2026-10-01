@@ -1,0 +1,150 @@
+# ── STEG Délestage — Docker Compose ──────────────────────────────────────────
+#
+# 6 containers:
+#   postgres          — shared database (steg_delestage)
+#   redis             — cache backend for the public API
+#   backend-internal  — full SCADA API (port 8000), runs migrations on start
+#   backend-public    — citizen-only API (port 8001), with Redis caching
+#   frontend-scada    — React operator interface (port 5173)
+#   frontend-citizen  — React citizen portal (port 5174)
+#
+# Usage:
+#   docker compose up --build         # first run
+#   docker compose up -d              # subsequent runs (detached)
+#   docker compose down -v            # tear down + wipe volumes
+#
+# Environment:
+#   Reads from .env.docker.  Copy .env.docker to .env.docker.local for local
+#   overrides (gitignored).
+
+version: "3.9"
+
+# ── Shared env reference ──────────────────────────────────────────────────────
+x-backend-env: &backend-env
+  DATABASE_URL:                 ${DATABASE_URL}
+  SECRET_KEY:                   ${SECRET_KEY}
+  ALGORITHM:                    ${ALGORITHM:-HS256}
+  ACCESS_TOKEN_EXPIRE_MINUTES:  ${ACCESS_TOKEN_EXPIRE_MINUTES:-30}
+  REFRESH_TOKEN_EXPIRE_HOURS:   ${REFRESH_TOKEN_EXPIRE_HOURS:-8}
+  ADMIN_PASSWORD:               ${ADMIN_PASSWORD}
+  REDIS_URL:                    ${REDIS_URL:-redis://redis:6379/0}
+  CORS_ORIGINS:                 ${CORS_ORIGINS}
+  DEBUG:                        ${DEBUG:-false}
+  OLLAMA_URL:                   ${OLLAMA_URL:-http://host.docker.internal:11434/api/chat}
+
+services:
+
+  # ── 1. PostgreSQL ────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER:     ${POSTGRES_USER:-steg_app}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-steg_secure_2026}
+      POSTGRES_DB:       ${POSTGRES_DB:-steg_delestage}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-steg_app} -d ${POSTGRES_DB:-steg_delestage}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ── 2. Redis ─────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ── 3. Internal SCADA API ─────────────────────────────────────────────────────
+  backend-internal:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env.docker
+    environment:
+      <<: *backend-env
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  # ── 4. Public Citizen API ────────────────────────────────────────────────────
+  backend-public:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.public
+    restart: unless-stopped
+    env_file:
+      - .env.docker
+    environment:
+      <<: *backend-env
+    ports:
+      - "8001:8001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      # Wait for internal container to finish migrations first
+      backend-internal:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  # ── 5. SCADA Operator Frontend ────────────────────────────────────────────────
+  frontend-scada:
+    build:
+      context: ./operators-frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: http://localhost:8000
+    restart: unless-stopped
+    ports:
+      - "5173:80"
+    depends_on:
+      - backend-internal
+
+  # ── 6. Citizen Portal Frontend ────────────────────────────────────────────────
+  frontend-citizen:
+    build:
+      context: ./citizen-frontend
+      dockerfile: Dockerfile
+      args:
+        # Citizen frontend talks to the public API tier only
+        VITE_API_URL: http://localhost:8001
+    restart: unless-stopped
+    ports:
+      - "5174:80"
+    depends_on:
+      - backend-public
+
+# ── Volumes ───────────────────────────────────────────────────────────────────
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
