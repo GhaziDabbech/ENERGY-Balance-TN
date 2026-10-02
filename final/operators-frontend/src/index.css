@@ -1,0 +1,63 @@
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&display=swap');
+@import "leaflet/dist/leaflet.css";
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html, body, #root {
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    background-color: #031427;
+    color: #d3e4fe;
+    font-family: 'IBM Plex Sans', sans-serif;
+  }
+
+  ::-webkit-scrollbar { width: 4px; height: 4px; }
+  ::-webkit-scrollbar-track { background: #0b1c30; }
+  ::-webkit-scrollbar-thumb { background: #26364a; border-radius: 2px; }
+}
+
+@layer components {
+  .steg-card {
+    @apply bg-bg-container border border-border-subtle rounded-sm p-4;
+  }
+  .steg-btn-primary {
+    @apply bg-accent-blue text-bg-deep font-semibold px-4 py-2 rounded-sm hover:bg-blue-300 transition-colors text-sm;
+  }
+  .steg-btn-secondary {
+    @apply bg-bg-high text-text-primary border border-border-subtle px-4 py-2 rounded-sm hover:bg-bg-highest transition-colors text-sm;
+  }
+  .steg-input {
+    @apply bg-bg-surface border border-border-subtle rounded-sm px-3 py-2 text-sm text-text-primary font-mono
+           placeholder:text-text-subtle focus:outline-none focus:border-accent-blue focus:ring-1 focus:ring-accent-blue/20 transition-all w-full;
+  }
+  .steg-label {
+    @apply text-[9px] font-mono text-text-subtle uppercase tracking-widest;
+  }
+  .badge-ok    { @apply bg-bg-high text-accent-blue text-[9px] font-mono font-bold px-2 py-0.5 rounded-sm; }
+  .badge-warn  { @apply bg-amber-900/50 text-accent-amber text-[9px] font-mono font-bold px-2 py-0.5 rounded-sm; }
+  .badge-crit  { @apply bg-error-bg/80 text-accent-red text-[9px] font-mono font-bold px-2 py-0.5 rounded-sm animate-pulse; }
+}
+
+/* Leaflet dark overrides */
+.leaflet-container     { background: #031427 !important; font-family: 'IBM Plex Sans', sans-serif; }
+.leaflet-control-zoom a { background: #102034 !important; color: #d3e4fe !important; border-color: #26364a !important; }
+.leaflet-control-zoom a:hover { background: #1b2b3f !important; color: #acc7ff !important; }
+.leaflet-bar           { border: 1px solid #26364a !important; box-shadow: none !important; }
+.leaflet-tooltip       { background: #102034; border: 1px solid #1e3352; border-radius: 3px; color: #d3e4fe; font-family: 'JetBrains Mono', monospace; font-size: 11px; }
+.leaflet-tooltip::before { border-top-color: #1e3352 !important; }
+.steg-map-tip          { background: transparent !important; border: none !important; box-shadow: none !important; padding: 0 !important; }
+.steg-map-tip::before  { display: none !important; }
+
+/* ── BCC 5 critical label jump animation ────────────────────────────────── */
+@keyframes bcc5-jump {
+  0%   { transform: scale(1)    translateY(0px);  }
+  30%  { transform: scale(1.08) translateY(-3px); }
+  60%  { transform: scale(1)    translateY(0px);  }
+  80%  { transform: scale(1.04) translateY(-1px); }
+  100% { transform: scale(1)    translateY(0px);  }
+}
