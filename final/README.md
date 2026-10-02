@@ -445,7 +445,17 @@ ollama pull qwen3:8b
 
 ## Screenshots
 
-> Add screenshots of the DN dashboard, BCC execution panel, the geographic map, and the citizen portal here.
+### DN Dashboard
+![DN Dashboard](docs/screenshots/dn-dashboard.png)
+
+### BCC Execution Panel
+![BCC Execution Panel](docs/screenshots/bcc-execution.png)
+
+### Geographic Map
+![Geographic Map](docs/screenshots/geographic-map.png)
+
+### Citizen Portal
+![Citizen Portal](docs/screenshots/citizen-portal.png)
 
 ---
 
