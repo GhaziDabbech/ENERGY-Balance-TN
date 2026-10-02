@@ -1,0 +1,8 @@
+# Shared base (keep in sync with requirements.txt)
+-r requirements.txt
+
+# Redis async client
+redis==5.2.1
+
+# FastAPI response-level caching backed by Redis
+fastapi-cache2==0.2.2
