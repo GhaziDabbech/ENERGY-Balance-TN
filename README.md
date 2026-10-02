@@ -3,7 +3,13 @@
 > The root folders hold the earlier integrated version described in the preselection report (tag `v1-preselection`).
 
 **National intelligent load-shedding management platform** · PESTGM 7.0 Tech Challenge, Track 2
-IEEE IAS/IES/PES ESPRIT Student Branch Joint Chapter × STEG
+IEEE IES-PES ENET'Com Student Branch Joint Chapter (SBJC)
+
+## 📄 Submission documents
+
+| Document | Link |
+|---|---|
+| Technical report | [Open on Google Drive](https://drive.google.com/drive/folders/1uOt40Ezn0nZXj5itYca8e_anbqmFbgH4) |
 
 When electricity demand exceeds supply, STEG must cut power to some areas and rotate the cuts
 ("délestage tournant"). Today this is coordinated manually between the Dispatching National (DN),
