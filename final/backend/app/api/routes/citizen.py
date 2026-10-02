@@ -626,7 +626,9 @@ def citizen_dashboard_me(
 # ── Legacy dashboard by ID (backwards compat) ────────────────────────────────
 
 @router.get("/dashboard/{citizen_id}")
-def citizen_dashboard_by_id(citizen_id: int, db: Session = Depends(get_db)):
+def citizen_dashboard_by_id(citizen_id: int, db: Session = Depends(get_db), me: Citizen = Depends(get_current_citizen)):
+    if me.id != citizen_id:
+        raise HTTPException(status_code=403, detail="Accès refusé")
     citizen = db.get(Citizen, citizen_id)
     if not citizen:
         raise HTTPException(status_code=404, detail="Citoyen introuvable")
@@ -1024,7 +1026,9 @@ def mark_all_read(
 # ── Citizens read (legacy, no auth) ──────────────────────────────────────────
 
 @router.get("/citizens/{citizen_id}")
-def get_citizen(citizen_id: int, db: Session = Depends(get_db)):
+def get_citizen(citizen_id: int, db: Session = Depends(get_db), me: Citizen = Depends(get_current_citizen)):
+    if me.id != citizen_id:
+        raise HTTPException(status_code=403, detail="Accès refusé")
     citizen = db.get(Citizen, citizen_id)
     if not citizen:
         raise HTTPException(status_code=404, detail="Citoyen introuvable")
@@ -1106,6 +1110,7 @@ def governorate_status(db: Session = Depends(get_db)):
         .filter(
             FeederModel.statut == "Actif",
             FeederModel.governorate.isnot(None),
+            FeederModel.priority != "P0",
         )
         .order_by(FeederModel.governorate.asc(), FeederModel.poste_source.asc(), FeederModel.ref.asc())
         .all()

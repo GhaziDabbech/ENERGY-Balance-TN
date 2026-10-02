@@ -112,7 +112,7 @@ def seed_executions(db: Session) -> None:
                     ref=ref,
                     nom=nom,
                     poste_source=f"Poste {bcc_name}",
-                    zone=nom.split()[0],
+                    governorate=nom.split()[0],
                     mw_nominal=mw,
                     priority=prio,
                     statut="Actif",
@@ -244,7 +244,7 @@ def seed_live_executions(db: Session) -> None:
         if not feeder:
             feeder = Feeder(
                 bcc_id=bcc.id, ref=f_ref, nom=f_nom,
-                poste_source=f"Poste {bcc_name}", zone=f_nom.split()[0],
+                poste_source=f"Poste {bcc_name}", governorate=f_nom.split()[0],
                 mw_nominal=mw, priority="P3", statut="Actif",
             )
             db.add(feeder)

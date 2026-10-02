@@ -187,6 +187,12 @@ async def create_execution(
             status_code=422,
             detail="Impossible de délester un départ P0 (infrastructure critique)",
         )
+    already = db.query(Execution).filter(
+        Execution.feeder_id == body.feeder_id,
+        Execution.status == "executing",
+    ).first()
+    if already:
+        raise HTTPException(status_code=409, detail="Ce départ est déjà en cours de délestage")
 
     execution = Execution(
         feeder_id=body.feeder_id,

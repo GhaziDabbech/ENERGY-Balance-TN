@@ -1,4 +1,6 @@
 # ENERGY Balance TN
+> **Final platform (demo version): see [`final/`](final/README.md).**
+> The root folders hold the earlier integrated version described in the preselection report (tag `v1-preselection`).
 
 **National intelligent load-shedding management platform** · PESTGM 7.0 Tech Challenge, Track 2
 IEEE IAS/IES/PES ESPRIT Student Branch Joint Chapter × STEG

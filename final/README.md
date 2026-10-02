@@ -1,4 +1,6 @@
 # STEG Délestage — Intelligent Load-Shedding Management System
+> **Final platform (demo version): see [`final/`](final/README.md).**
+> The root folders hold the earlier integrated version described in the preselection report (tag `v1-preselection`).
 
 > A full-stack SCADA platform for managing Tunisia's national rotating power cuts (délestage tournant), used by operators at every level of the grid hierarchy: DN → CRC → BCC → Citizens.
 
@@ -340,10 +342,11 @@ Default credentials (seeded on first run):
 
 | Username | Password | Role |
 |---|---|---|
-| `admin` | `StegAdmin2026!` (from env) | ADMIN |
-| `dn_user` | `password123` | DN |
-| `crc_nord` | `password123` | CRC Nord |
-| `bcc1` … `bcc7` | `password123` | BCC operators |
+| `admin` | `StegAdmin2026!` (from env, must change at first login) | ADMIN |
+| `dn.admin` | `admin1234` | DN |
+| `crc.nord` / `crc.sud` | `crcnord1234` / `crcsud1234` | CRC Nord / CRC Sud |
+| `bcc.3` / `bcc.5` | `bcc31234` / `bcc51234` | BCC operators |
+| `tarek.sfaxsi@demo.tn` (14 `@demo.tn` citizens) | `citizen1234` | Citizen |
 
 ---
 
